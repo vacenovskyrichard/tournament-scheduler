@@ -690,14 +690,14 @@ function renderModMiniBracket(grp, ctx) {
       <div class="mb-grid">
         ${matchRow(m1, `${lbl}1`, `${lbl}4`, 'M1', teams[0], teams[3], seedOf(teams[0]), seedOf(teams[3]))}
         ${matchRow(m2, `${lbl}2`, `${lbl}3`, 'M2', teams[1], teams[2], seedOf(teams[1]), seedOf(teams[2]))}
-        ${matchRow(m3, 'Vít. M1', 'Vít. M2', 'M3 — Finále',     '', '', null, null, winM1, winM2)}
-        ${matchRow(m4, 'Por. M1', 'Por. M2', 'M4 — O 3. místo', '', '', null, null, losM1, losM2)}
+        ${matchRow(m3, 'Vít. M1', 'Vít. M2', `M3 — o 1./2. místo ve sk. ${lbl}`, '', '', null, null, winM1, winM2)}
+        ${matchRow(m4, 'Por. M1', 'Por. M2', `M4 — o 3./4. místo ve sk. ${lbl}`, '', '', null, null, losM1, losM2)}
       </div>
       <div class="mb-podium">
-        <div class="mb-rank">🥇 <strong>1.</strong> ${escapeHtml(rank1 || '_____')}</div>
-        <div class="mb-rank">🥈 <strong>2.</strong> ${escapeHtml(rank2 || '_____')}</div>
-        <div class="mb-rank">🥉 <strong>3.</strong> ${escapeHtml(rank3 || '_____')}</div>
-        <div class="mb-rank">🥔 <strong>4.</strong> ${escapeHtml(rank4 || '_____')}</div>
+        <div class="mb-rank"><strong>1${lbl}</strong> ${escapeHtml(rank1 || '_____')}</div>
+        <div class="mb-rank"><strong>2${lbl}</strong> ${escapeHtml(rank2 || '_____')}</div>
+        <div class="mb-rank"><strong>3${lbl}</strong> ${escapeHtml(rank3 || '_____')}</div>
+        <div class="mb-rank"><strong>4${lbl}</strong> ${escapeHtml(rank4 || '_____')}</div>
       </div>
       ${orderItems.length ? `<div class="mb-order"><strong>Pořadí zápasů:</strong> ${orderItems.join('&nbsp;&nbsp;&nbsp;')}</div>` : ''}
     </div>

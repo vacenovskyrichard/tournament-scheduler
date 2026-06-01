@@ -699,8 +699,21 @@ input[type="range"] {
   border-top: 1px solid var(--border);
   font-size: .9rem;
 }
-.mb-rank { display: flex; align-items: center; gap: 4px; }
-.mb-rank strong { color: var(--text-m); font-weight: 600; }
+.mb-rank {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  border-bottom: 1.5px solid #1f2937;
+  padding: 0 4px 2px;
+  min-width: 0;
+}
+.mb-rank strong {
+  color: var(--blue-d);
+  font-weight: 700;
+  font-style: italic;
+  flex: 0 0 auto;
+  letter-spacing: .02em;
+}
 
 .mb-order {
   font-size: .8rem;
