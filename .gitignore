@@ -1,0 +1,21 @@
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Future-proof (no build pipeline yet but if added later)
+node_modules/
+dist/
+build/
+
+# Logs / temp
+*.log
+*.tmp
+*.bak
+
+# Claude CLI per-user settings (not portable)
+.claude/settings.local.json

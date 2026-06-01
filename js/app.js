@@ -1,0 +1,854 @@
+'use strict';
+
+// ─── App state ─────────────────────────────────────────────────────────────
+const state = {
+  step: 1,
+  sport: 'beach_volleyball',
+  teams: ['Tým A', 'Tým B', 'Tým C', 'Tým D'],
+  courts: 2,
+  startTime: '09:00',
+  endTime: '13:00',
+  mode: 'print',
+  options: [],
+  selectedOption: null,
+  schedule: [],
+  scores: {},
+};
+
+const SPORTS = {
+  beach_volleyball: { label: 'Plážový volejbal', emoji: '🏐' },
+  tennis:           { label: 'Tenis',             emoji: '🎾' },
+  padel:            { label: 'Padel',             emoji: '🎾' },
+  volleyball:       { label: 'Volejbal',          emoji: '🏐' },
+  badminton:        { label: 'Badminton',         emoji: '🏸' },
+};
+
+// ─── DOM helpers ───────────────────────────────────────────────────────────
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => document.querySelectorAll(sel);
+
+// ─── Step navigation ───────────────────────────────────────────────────────
+function goToStep(n) {
+  state.step = n;
+  $$('.step-panel').forEach(el => el.classList.add('hidden'));
+  $(`#step${n}`).classList.remove('hidden');
+  $$('.step-indicator').forEach((el, i) => {
+    el.classList.toggle('active',   i + 1 === n);
+    el.classList.toggle('done',     i + 1 < n);
+    el.classList.toggle('upcoming', i + 1 > n);
+  });
+  // Wider main-content on step 3 so the bracket can fit without horizontal scroll.
+  $('.main-content').classList.toggle('wide-content', n === 3);
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ─── Step 1: Setup ─────────────────────────────────────────────────────────
+function renderStep1() {
+  renderSportSelector();
+  renderTeamList();
+  $('#courts').value    = state.courts;
+  $('#startTime').value = state.startTime;
+  $('#endTime').value   = state.endTime;
+  $(`input[name="mode"][value="${state.mode}"]`).checked = true;
+  updateAvailableTime();
+}
+
+function renderSportSelector() {
+  const container = $('#sportSelector');
+  container.innerHTML = Object.entries(SPORTS).map(([key, val]) => `
+    <button class="sport-btn ${state.sport === key ? 'selected' : ''}" data-sport="${key}">
+      <span class="sport-emoji">${val.emoji}</span>
+      <span>${val.label}</span>
+    </button>
+  `).join('');
+  container.querySelectorAll('.sport-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.sport = btn.dataset.sport;
+      renderSportSelector();
+    });
+  });
+}
+
+function renderTeamList() {
+  const container = $('#teamList');
+  container.innerHTML = state.teams.map((name, i) => `
+    <div class="team-row" data-index="${i}">
+      <span class="team-num">${i + 1}.</span>
+      <input type="text" class="team-input" value="${escapeHtml(name)}"
+             placeholder="Název týmu ${i + 1}" data-index="${i}" />
+      <button class="btn-remove-team" data-index="${i}" title="Odebrat tým">✕</button>
+    </div>
+  `).join('');
+
+  container.querySelectorAll('.team-input').forEach(inp => {
+    inp.addEventListener('input', e => {
+      state.teams[+e.target.dataset.index] = e.target.value;
+    });
+  });
+  container.querySelectorAll('.btn-remove-team').forEach(btn => {
+    btn.addEventListener('click', e => {
+      const idx = +e.currentTarget.dataset.index;
+      if (state.teams.length > 2) {
+        state.teams.splice(idx, 1);
+        renderTeamList();
+        updateAvailableTime();
+      }
+    });
+  });
+  updateTeamCount();
+}
+
+function addTeam() {
+  state.teams.push(`Tým ${String.fromCharCode(65 + state.teams.length)}`);
+  renderTeamList();
+  updateAvailableTime();
+  const inputs = $$('.team-input');
+  inputs[inputs.length - 1]?.focus();
+  inputs[inputs.length - 1]?.select();
+}
+
+function updateTeamCount() {
+  const n = state.teams.length;
+  $('#teamCount').textContent = `${n} týmů`;
+  const warning = $('#teamWarning');
+  if (n < 3) {
+    warning.textContent = '⚠ Minimum jsou 3 týmy.';
+    warning.classList.remove('hidden');
+  } else {
+    warning.classList.add('hidden');
+  }
+}
+
+function updateAvailableTime() {
+  const [sh, sm] = state.startTime.split(':').map(Number);
+  const [eh, em] = state.endTime.split(':').map(Number);
+  const totalMin = (eh * 60 + em) - (sh * 60 + sm);
+  if (totalMin <= 0) {
+    $('#availableTime').textContent = '⚠ Neplatný čas';
+    return;
+  }
+  $('#availableTime').textContent = `Dostupný čas: ${minutesToHHMM(totalMin)}`;
+}
+
+function validateStep1() {
+  const [sh, sm] = state.startTime.split(':').map(Number);
+  const [eh, em] = state.endTime.split(':').map(Number);
+  const totalMin = (eh * 60 + em) - (sh * 60 + sm);
+  if (state.teams.length < 3) { showToast('Zadej alespoň 3 týmy.', 'error'); return false; }
+  if (state.teams.some(t => !t.trim())) { showToast('Všechny týmy musí mít název.', 'error'); return false; }
+  if (totalMin < 30) { showToast('Turnaj musí trvat alespoň 30 minut.', 'error'); return false; }
+  return true;
+}
+
+// ─── Step 2: Options ───────────────────────────────────────────────────────
+function generateAndShowOptions() {
+  if (!validateStep1()) return;
+
+  const today = new Date();
+  const [sh, sm] = state.startTime.split(':').map(Number);
+  const [eh, em] = state.endTime.split(':').map(Number);
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate(), sh, sm);
+  const end   = new Date(today.getFullYear(), today.getMonth(), today.getDate(), eh, em);
+
+  state.options = generateOptions(state.teams, state.courts, start, end, state.mode === 'online');
+
+  if (state.options.length === 0) {
+    showToast('Žádný formát se nevejde do zadaného času. Zkus delší čas nebo jiný počet kurtů.', 'error');
+    return;
+  }
+
+  renderOptions();
+  goToStep(2);
+}
+
+function renderOptions() {
+  const container = $('#optionsList');
+  if (state.options.length === 0) {
+    container.innerHTML = '<p class="no-options">Žádné možnosti nenalezeny. Zkus jiné parametry.</p>';
+    return;
+  }
+
+  const [sh, sm] = state.startTime.split(':').map(Number);
+  const startDate = new Date(2000, 0, 1, sh, sm);
+
+  container.innerHTML = state.options.map((opt, i) => {
+    const pct        = Math.round(opt.fitnessScore * 100);
+    const fmtColor   = opt.matchFormat.sortPriority <= 2 ? 'badge-preferred' : 'badge-normal';
+    const estEnd     = new Date(startDate.getTime() + opt.estimatedMinutes * 60000);
+    const fitnessClass =
+      pct >= 85 ? 'fitness-great' :
+      pct >= 65 ? 'fitness-good'  :
+                  'fitness-low';
+
+    return `
+    <div class="option-card ${i === 0 ? 'option-best' : ''}" data-index="${i}">
+      ${i === 0 ? '<div class="best-badge">⭐ Nejlepší shoda</div>' : ''}
+      <div class="option-header">
+        <div class="option-title">${opt.tournamentName}</div>
+        <span class="match-format-badge ${fmtColor}">${opt.matchFormat.shortName}</span>
+      </div>
+      <p class="option-desc">${opt.tournamentDesc}</p>
+      <div class="option-stats">
+        <div class="stat">
+          <span class="stat-label">⏱ Odhadovaný čas</span>
+          <span class="stat-value">${minutesToHHMM(opt.estimatedMinutes)}</span>
+          <span class="stat-sub">Konec ~${formatTime(estEnd)}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">🎮 Zápasů celkem</span>
+          <span class="stat-value">${opt.totalMatches}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">📊 Zápasy na tým</span>
+          <span class="stat-value">${opt.minMatchesPerTeam === opt.maxMatchesPerTeam
+            ? opt.minMatchesPerTeam
+            : `${opt.minMatchesPerTeam}–${opt.maxMatchesPerTeam}`}</span>
+          <span class="stat-sub">${opt.minMatchesPerTeam === opt.maxMatchesPerTeam
+            ? 'každý hraje stejně'
+            : `min ${opt.minMatchesPerTeam}, max ${opt.maxMatchesPerTeam}`}</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">📈 Využití času</span>
+          <span class="stat-value ${fitnessClass}">${pct}%</span>
+        </div>
+      </div>
+      <div class="format-rules">
+        <strong>Formát zápasu:</strong> ${opt.matchFormat.rules}
+        · <em>~${opt.matchFormat.duration} min / zápas</em>
+      </div>
+      <button class="btn btn-select" data-index="${i}">Vybrat tento formát →</button>
+    </div>
+    `;
+  }).join('');
+
+  container.querySelectorAll('.btn-select').forEach(btn => {
+    btn.addEventListener('click', e => selectOption(+e.currentTarget.dataset.index));
+  });
+}
+
+function selectOption(idx) {
+  state.selectedOption = state.options[idx];
+  const [sh, sm] = state.startTime.split(':').map(Number);
+  const today    = new Date();
+  const start    = new Date(today.getFullYear(), today.getMonth(), today.getDate(), sh, sm);
+  state.schedule = buildSchedule(state.selectedOption, state.teams, state.courts, start);
+  state.scores   = {};
+  renderSchedule();
+  goToStep(3);
+}
+
+// ─── Step 3: Schedule ──────────────────────────────────────────────────────
+function renderSchedule() {
+  const opt = state.selectedOption;
+  if (!opt) return;
+
+  // Header
+  $('#scheduleTitle').textContent =
+    `${SPORTS[state.sport].emoji} ${SPORTS[state.sport].label} — ${opt.tournamentName}`;
+  $('#scheduleSubtitle').textContent =
+    `${state.teams.length} týmů · ${state.courts} kurt${state.courts > 1 ? 'y/ů' : ''} · ${opt.matchFormat.shortName}`;
+
+  // Summary pills
+  const [sh, sm] = state.startTime.split(':').map(Number);
+  const start = new Date(2000, 0, 1, sh, sm);
+  const estEnd = new Date(start.getTime() + opt.estimatedMinutes * 60000);
+  $('#scheduleSummary').innerHTML = `
+    <span class="pill">⏰ ${state.startTime} – ~${formatTime(estEnd)}</span>
+    <span class="pill">🎮 ${opt.totalMatches} zápasů</span>
+    <span class="pill">📊 ${opt.minMatchesPerTeam === opt.maxMatchesPerTeam
+      ? opt.minMatchesPerTeam + ' zápasů/tým'
+      : opt.minMatchesPerTeam + '–' + opt.maxMatchesPerTeam + ' zápasů/tým'}</span>
+    <span class="pill">${opt.matchFormat.name}</span>
+  `;
+
+  renderScheduleTable();
+  renderGroupStandings();
+  renderBracket();
+  renderLegend();
+}
+
+// ─── Schedule table ────────────────────────────────────────────────────────
+// Compact grid: rows = time slots, columns = courts. Each cell shows the match
+// that runs on that court in that slot. Whole tournament typically fits a single
+// A4 page this way.
+function renderScheduleTable() {
+  const schedule = state.schedule;
+  const numCourts = state.courts;
+
+  // Group matches by time slot (preserve schedule order)
+  const slots = new Map();   // timeKey → { time, phase, roundName, matches[court] }
+  for (const m of schedule) {
+    const t = formatTime(m.time);
+    if (!slots.has(t)) {
+      slots.set(t, { time: t, phase: m.phase, roundName: m.roundName, matches: {} });
+    }
+    slots.get(t).matches[m.court] = m;
+  }
+
+  // Build header: Čas | Kolo | Kurt 1 | … | Kurt N
+  const head = $('#scheduleHead');
+  if (head) {
+    const courtCols = [];
+    for (let c = 1; c <= numCourts; c++) courtCols.push(`<th>Kurt ${c}</th>`);
+    head.innerHTML = `<tr>
+      <th class="th-time">Čas</th>
+      <th class="th-round">Kolo / Fáze</th>
+      ${courtCols.join('')}
+    </tr>`;
+  }
+
+  // Build rows
+  let html = '';
+  let lastPhase = null;
+  for (const slot of slots.values()) {
+    // Phase transition separator
+    if (slot.phase !== lastPhase && lastPhase !== null) {
+      const isTransition =
+        (lastPhase === 'pool'      && ['semifinal', 'bracket', 'losers', 'final'].includes(slot.phase)) ||
+        (lastPhase === 'bracket'   && slot.phase === 'losers') ||
+        (lastPhase === 'losers'    && slot.phase === 'final')  ||
+        (lastPhase === 'semifinal' && slot.phase === 'final');
+      if (isTransition) {
+        const label =
+          slot.phase === 'losers'    ? '⬇ Losers Bracket' :
+          slot.phase === 'bracket'   ? '🏆 Pavouk (Winners Bracket)' :
+          slot.phase === 'semifinal' ? '🏆 Vyřazovací část' :
+          slot.phase === 'final'     ? '🥇 Finálová část' : '🔄 Další fáze';
+        html += `<tr class="phase-separator">
+          <td colspan="${numCourts + 2}"><span class="phase-label">${label}</span></td>
+        </tr>`;
+      }
+    }
+    lastPhase = slot.phase;
+
+    const cells = [];
+    for (let c = 1; c <= numCourts; c++) {
+      const m = slot.matches[c];
+      if (!m) { cells.push('<td class="court-empty">—</td>'); continue; }
+      cells.push(`<td class="match-cell">
+        <span class="match-team">${escapeHtml(m.team1Label)}</span>
+        <span class="match-vs">×</span>
+        <span class="match-team">${escapeHtml(m.team2Label)}</span>
+      </td>`);
+    }
+
+    html += `<tr class="match-row row-${slot.phase}">
+      <td class="time-cell">${slot.time}</td>
+      <td class="round-cell">${escapeHtml(slot.roundName)}</td>
+      ${cells.join('')}
+    </tr>`;
+  }
+
+  $('#scheduleBody').innerHTML = html;
+}
+
+// ─── Group standings ───────────────────────────────────────────────────────
+function getGroupTeams(option, teamNames) {
+  const t      = teamNames;
+  const labels = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'];
+  const groups = [];
+
+  if (option.type === 'pool_knockout') {
+    let idx = 0;
+    for (let p = 0; p < option.numPools; p++) {
+      const teams = [];
+      for (let i = 0; i < option.poolSizes[p]; i++) teams.push(t[idx++]);
+      groups.push({ label: labels[p], teams, groupType: 'rr' });
+    }
+  } else if (option.type === 'modified_pool') {
+    let idx = 0;
+    for (let g = 0; g < option.g4; g++) {
+      groups.push({ label: labels[g], teams: t.slice(idx, idx + 4), groupType: 'mod4' });
+      idx += 4;
+    }
+    for (let g = 0; g < option.g3; g++) {
+      groups.push({ label: labels[option.g4 + g], teams: t.slice(idx, idx + 3), groupType: 'rr3' });
+      idx += 3;
+    }
+  }
+
+  return groups;
+}
+
+function computeGroupStandings(groups, schedule, scores, fmtId) {
+  return groups.map(grp => {
+    const teamSet   = new Set(grp.teams);
+    const standings = grp.teams.map(name => ({ name, w: 0, l: 0, d: 0, played: 0 }));
+
+    for (const m of schedule) {
+      if (m.phase !== 'pool') continue;
+      if (!teamSet.has(m.team1Label) || !teamSet.has(m.team2Label)) continue;
+      const winner = matchWinner(scores, m.id, fmtId);
+      if (winner === 0) continue;
+      const t1 = standings.find(s => s.name === m.team1Label);
+      const t2 = standings.find(s => s.name === m.team2Label);
+      if (!t1 || !t2) continue;
+      t1.played++; t2.played++;
+      if (winner === 1) { t1.w++; t2.l++; }
+      else              { t2.w++; t1.l++; }
+    }
+
+    standings.sort((a, b) => b.w - a.w || a.l - b.l || a.name.localeCompare(b.name));
+    return { ...grp, standings };
+  });
+}
+
+// Build a label → real team name map for auto-propagation through the bracket.
+// Resolves "1. Sk.A" → group leader, "Vít. P1" → KO match winner, etc.
+function buildResolvedNames(option, schedule, scores) {
+  const resolved = {};
+  if (!option || !['pool_knockout', 'modified_pool'].includes(option.type)) return resolved;
+
+  const fmtId = option.matchFormat.id;
+
+  // Group ranks → "1. Sk.X", "2. Sk.X", …
+  const groups = getGroupTeams(option, state.teams);
+  const withStandings = computeGroupStandings(groups, schedule, scores, fmtId);
+  for (const grp of withStandings) {
+    grp.standings.forEach((s, rank) => {
+      if (s.played > 0) {
+        resolved[`${rank + 1}. Sk.${grp.label}`] = s.name;
+      }
+    });
+  }
+
+  // KO winners / losers → "Vít. P1", "Por. SF1", …
+  // Iterate to fixed point so winners propagate through multiple rounds.
+  const koMatches = schedule.filter(m =>
+    ['semifinal', 'final', 'bracket'].includes(m.phase) && m.koLabel
+  );
+  const isPlaceholder = s => /^(\d+\. Sk\.|Vít\.\s|Por\.\s)/.test(String(s || ''));
+
+  for (let iter = 0; iter < 8; iter++) {
+    let changed = false;
+    for (const m of koMatches) {
+      const t1 = resolved[m.team1Label] || m.team1Label;
+      const t2 = resolved[m.team2Label] || m.team2Label;
+      if (isPlaceholder(t1) || isPlaceholder(t2)) continue;
+      const winner = matchWinner(scores, m.id, fmtId);
+      if (winner === 0) continue;
+      const winnerName = winner === 1 ? t1 : t2;
+      const loserName  = winner === 1 ? t2 : t1;
+      const wk = `Vít. ${m.koLabel}`;
+      const lk = `Por. ${m.koLabel}`;
+      if (resolved[wk] !== winnerName) { resolved[wk] = winnerName; changed = true; }
+      if (resolved[lk] !== loserName)  { resolved[lk] = loserName;  changed = true; }
+      // Legacy SF feeder variants used by pushKnockout:
+      if (/^SF\d+$/.test(m.koLabel)) {
+        const n = m.koLabel.slice(2);
+        if (resolved[`Vít. SF ${n}`] !== winnerName) { resolved[`Vít. SF ${n}`] = winnerName; changed = true; }
+        if (resolved[`Por. SF ${n}`] !== loserName)  { resolved[`Por. SF ${n}`] = loserName;  changed = true; }
+      }
+    }
+    if (!changed) break;
+  }
+  return resolved;
+}
+
+function renderGroupStandings() {
+  const opt = state.selectedOption;
+  const el  = $('#groupStandings');
+  if (!opt || !['pool_knockout', 'modified_pool'].includes(opt.type)) {
+    el.innerHTML = ''; return;
+  }
+
+  const isOnline = state.mode === 'online';
+  const fmtId    = opt.matchFormat.id;
+  const numSets  = setsForFormat(fmtId);
+  const groups   = getGroupTeams(opt, state.teams);
+  const withStandings = computeGroupStandings(groups, state.schedule, state.scores, fmtId);
+
+  const seedOf = name => state.teams.indexOf(name) + 1;
+  const setLabels = numSets === 1 ? [''] : ['1.set', '2.set', 'TB'];
+
+  let html = '<div class="card"><div class="card-title">📊 Skupinové tabulky</div><div class="groups-stack">';
+
+  for (const grp of withStandings) {
+    const teams = grp.teams;
+    const N     = teams.length;
+
+    // Build N×N match matrix using pool matches that involve only this group's teams
+    const matchMatrix = Array.from({ length: N }, () => new Array(N).fill(null));
+    const teamSet = new Set(teams);
+    const matches = state.schedule.filter(m =>
+      m.phase === 'pool' && teamSet.has(m.team1Label) && teamSet.has(m.team2Label)
+    );
+    for (const m of matches) {
+      const i = teams.indexOf(m.team1Label);
+      const j = teams.indexOf(m.team2Label);
+      if (i >= 0 && j >= 0) {
+        matchMatrix[i][j] = { match: m, orient: 'direct'  };
+        matchMatrix[j][i] = { match: m, orient: 'reverse' };
+      }
+    }
+
+    // Match order labels — in scheduled order
+    const matchOrderLabels = matches.map(m => {
+      const i = teams.indexOf(m.team1Label);
+      const j = teams.indexOf(m.team2Label);
+      return `${formatTime(m.time)} ${grp.label}${i + 1}–${grp.label}${j + 1}`;
+    });
+
+    // Determine court(s) used by this group
+    const courts = [...new Set(matches.map(m => m.court))].sort();
+    const courtLabel = courts.length === 1
+      ? `(kurt ${courts[0]})`
+      : courts.length > 1 ? `(kurty ${courts.join(', ')})` : '';
+
+    // Standings lookup (online: from computeGroupStandings; print: blanks)
+    const rankByName = new Map();
+    const ptsByName  = new Map();
+    grp.standings.forEach((s, rank) => {
+      rankByName.set(s.name, rank + 1);
+      ptsByName.set(s.name, s.played > 0 ? s.w : null);
+    });
+
+    // Header row: "Týmy" / "Nasazení" / N opponent columns / "Body" / "Pořadí"
+    let head = '<thead><tr>';
+    head += '<th class="ct-team-h">Týmy</th>';
+    head += '<th class="ct-seed-h">Nasazení</th>';
+    for (let k = 0; k < N; k++) head += '<th class="ct-opp-h">/</th>';
+    head += '<th class="ct-pts-h">Body</th>';
+    head += '<th class="ct-rank-h">Pořadí</th>';
+    head += '</tr></thead>';
+
+    let body = '<tbody>';
+    for (let i = 0; i < N; i++) {
+      const tname  = teams[i];
+      const tlabel = `${grp.label}${i + 1}`;
+
+      body += `<tr>`;
+      body += `<td class="ct-team"><span class="ct-team-code">${escapeHtml(tlabel)}:</span> <span class="ct-team-name">${escapeHtml(tname)}</span></td>`;
+      body += `<td class="ct-seed">${seedOf(tname)}</td>`;
+
+      for (let j = 0; j < N; j++) {
+        if (i === j) {
+          body += '<td class="ct-cell ct-x"></td>';
+          continue;
+        }
+        const cell = matchMatrix[i][j];
+        if (!cell) {
+          body += '<td class="ct-cell ct-empty"></td>';
+          continue;
+        }
+        const m        = cell.match;
+        const isDirect = cell.orient === 'direct';
+        const team1    = isDirect ? 1 : 2;
+        const team2    = isDirect ? 2 : 1;
+
+        const setRows = [];
+        for (let s = 0; s < numSets; s++) {
+          const k1 = `${m.id}_${team1}_${s}`;
+          const k2 = `${m.id}_${team2}_${s}`;
+          const v1 = state.scores[k1] ?? '';
+          const v2 = state.scores[k2] ?? '';
+          const label = numSets === 1 ? '' : `<span class="ct-set-lbl">${setLabels[s]}</span>`;
+          if (isOnline) {
+            setRows.push(`<div class="ct-set-row">${label}
+              <input type="number" min="0" max="99" class="ct-score-inp"
+                     data-key="${k1}" value="${v1}" placeholder="—">
+              <span class="ct-sep">:</span>
+              <input type="number" min="0" max="99" class="ct-score-inp"
+                     data-key="${k2}" value="${v2}" placeholder="—">
+            </div>`);
+          } else {
+            setRows.push(`<div class="ct-set-row">${label}
+              <span class="ct-box"></span><span class="ct-sep">:</span><span class="ct-box"></span>
+            </div>`);
+          }
+        }
+        body += `<td class="ct-cell ct-cell-sets ct-sets-${numSets}">${setRows.join('')}</td>`;
+      }
+
+      const pts  = isOnline && ptsByName.get(tname) != null ? ptsByName.get(tname) : '';
+      const rank = isOnline && rankByName.has(tname) && ptsByName.get(tname) != null
+        ? rankByName.get(tname) + '.' : '';
+      body += `<td class="ct-pts">${pts}</td>`;
+      body += `<td class="ct-rank">${rank}</td>`;
+      body += '</tr>';
+    }
+    body += '</tbody>';
+
+    html += `
+      <div class="cross-table-wrap">
+        <div class="ct-header">Skupina ${grp.label} <span class="ct-header-court">${courtLabel}</span></div>
+        <table class="cross-table">
+          ${head}
+          ${body}
+        </table>
+        ${matchOrderLabels.length > 0
+          ? `<div class="ct-order"><strong>Pořadí zápasů:</strong> ${matchOrderLabels.join('&nbsp;&nbsp;&nbsp;')}</div>`
+          : ''}
+      </div>
+    `;
+  }
+
+  html += '</div></div>';
+  el.innerHTML = html;
+
+  if (isOnline) {
+    el.querySelectorAll('.ct-score-inp').forEach(inp => {
+      inp.addEventListener('input', e => {
+        const v = e.target.value;
+        if (v === '' || /^\d{1,2}$/.test(v)) {
+          state.scores[e.target.dataset.key] = v;
+        }
+        withFocusPreserve(() => { renderGroupStandings(); renderBracket(); });
+      });
+    });
+  }
+}
+
+// ─── Bracket visualization ─────────────────────────────────────────────────
+function renderBracket() {
+  const opt = state.selectedOption;
+  const el  = $('#bracketView');
+  if (!opt) { el.innerHTML = ''; return; }
+
+  const koPhases  = new Set(['semifinal', 'final', 'bracket', 'losers']);
+  const koMatches = state.schedule.filter(m => koPhases.has(m.phase));
+  if (koMatches.length === 0) { el.innerHTML = ''; return; }
+
+  const isOnline   = state.mode === 'online';
+  const fmtId      = opt.matchFormat.id;
+  const numSets    = setsForFormat(fmtId);
+  const setLabels  = numSets === 1 ? [''] : ['1.set', '2.set', 'TB'];
+  const resolved   = buildResolvedNames(opt, state.schedule, state.scores);
+
+  // Pretty label for a feeder slot. Prefer resolved team name; fall back to a
+  // human-readable placeholder.
+  const feederLabel = (rawLabel) => {
+    const resolvedName = resolved[rawLabel];
+    if (resolvedName) return resolvedName;
+    let mm;
+    if ((mm = rawLabel.match(/^([12])\. Sk\.(.+)$/)))         return `${mm[1]}. ze skupiny ${mm[2]}`;
+    if ((mm = rawLabel.match(/^Vít\. SF ?(\d+)$/)))           return `vítěz SF${mm[1]}`;
+    if ((mm = rawLabel.match(/^Por\. SF ?(\d+)$/)))           return `poražený SF${mm[1]}`;
+    if ((mm = rawLabel.match(/^Vít\. ČF ?(\d+)$/)))           return `vítěz P${mm[1]}`;
+    if ((mm = rawLabel.match(/^Vít\. P(\d+)$/)))              return `vítěz P${mm[1]}`;
+    if ((mm = rawLabel.match(/^Por\. P(\d+)$/)))              return `poražený P${mm[1]}`;
+    if ((mm = rawLabel.match(/^Por\. M(\d) sk\.(.+)$/)))      return `poražený M${mm[1]} sk.${mm[2]}`;
+    if ((mm = rawLabel.match(/^Vít\. M(\d) sk\.(.+)$/)))      return `vítěz M${mm[1]} sk.${mm[2]}`;
+    return rawLabel;
+  };
+  const isResolved = label => !!resolved[label];
+
+  const kindOf = (roundName) => {
+    if (/Předkolo|Osmifinále|Čtvrtfinále/i.test(roundName)) return 'p';
+    if (/Semifinále/i.test(roundName))                       return 'sf';
+    if (/^O 3\. místo/.test(roundName))                      return 'f3';
+    if (/Finále|Grand/i.test(roundName))                     return 'f1';
+    if (/^WB /.test(roundName))                              return 'wb';
+    if (/^LB /.test(roundName))                              return 'lb';
+    return 'x';
+  };
+
+  // Group by roundName (preserve schedule insertion order)
+  const byRound = new Map();
+  for (const m of koMatches) {
+    if (!byRound.has(m.roundName)) byRound.set(m.roundName, []);
+    byRound.get(m.roundName).push(m);
+  }
+
+  let html = '<div class="card"><div class="card-title">🏆 Pavouk</div><div class="bracket-view">';
+
+  for (const [roundName, matches] of byRound) {
+    const phase = matches[0].phase;
+    const kind  = kindOf(roundName);
+
+    html += `<div class="bracket-round bround-${phase} bround-kind-${kind}">`;
+    html += `<div class="bracket-round-label">${roundName}</div>`;
+    html += `<div class="bracket-round-matches">`;
+
+    for (const m of matches) {
+      const badge  = m.koLabel || '';
+      const winner = isOnline ? matchWinner(state.scores, m.id, fmtId) : 0;
+      const w1 = winner === 1, w2 = winner === 2;
+      const t1Name = resolved[m.team1Label] || '';
+      const t2Name = resolved[m.team2Label] || '';
+      const t1Placeholder = feederLabel(m.team1Label);
+      const t2Placeholder = feederLabel(m.team2Label);
+
+      // Per-set score boxes — small empty boxes (or inputs in online mode).
+      const scoresFor = (team) => {
+        const cells = [];
+        for (let s = 0; s < numSets; s++) {
+          const key = `${m.id}_${team}_${s}`;
+          const val = state.scores[key] ?? '';
+          cells.push(isOnline
+            ? `<input type="number" min="0" max="99" class="bm-score-inp"
+                   data-key="${key}" value="${val}" title="${setLabels[s]}">`
+            : `<span class="bm-score-box" title="${setLabels[s]}"></span>`);
+        }
+        return cells.join('');
+      };
+
+      // Medals only on Finále (F1) and "O 3. místo" (F3).
+      let med1 = null, med2 = null;
+      if (kind === 'f1') {
+        if (w2) { med1 = '🥈'; med2 = '🥇'; } else { med1 = '🥇'; med2 = '🥈'; }
+      } else if (kind === 'f3') {
+        if (w2) { med1 = '🥔'; med2 = '🥉'; } else { med1 = '🥉'; med2 = '🥔'; }
+      }
+
+      const teamBlock = (name, placeholder, isWinner, isLoser, team, medal) => `
+        <div class="bm-team ${isWinner ? 'bm-team-won' : isLoser ? 'bm-team-lost' : ''}">
+          <div class="bm-team-main">
+            <div class="bm-name-line">${escapeHtml(name)}</div>
+            <div class="bm-placeholder">${escapeHtml(placeholder)}</div>
+          </div>
+          <div class="bm-scores">${scoresFor(team)}</div>
+          ${medal ? `<div class="bm-medal">${medal}</div>` : ''}
+        </div>`;
+
+      html += `
+        <div class="bracket-match" style="--set-cols: ${numSets};">
+          <div class="bm-match-body">
+            ${teamBlock(t1Name, t1Placeholder, w1, w2, 1, med1)}
+            ${teamBlock(t2Name, t2Placeholder, w2, w1, 2, med2)}
+          </div>
+          <div class="bm-badge-box">
+            <div class="bm-badge">${badge}</div>
+            <div class="bm-meta">kurt: ${m.court}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    html += '</div></div>';   /* close .bracket-round-matches and .bracket-round */
+  }
+
+  html += '</div></div>';
+  el.innerHTML = html;
+
+  if (isOnline) {
+    el.querySelectorAll('.bm-slash[data-key]').forEach(inp => {
+      inp.addEventListener('input', e => {
+        const v = e.target.value;
+        if (v === '' || /^\d{1,2}$/.test(v)) {
+          state.scores[e.target.dataset.key] = v;
+        }
+        withFocusPreserve(() => { renderGroupStandings(); renderBracket(); });
+      });
+    });
+  }
+}
+
+// ─── Legend ─────────────────────────────────────────────────────────────────
+function renderLegend() {
+  const opt  = state.selectedOption;
+  const type = opt.type;
+
+  let phaseRows = '';
+  if (type === 'pool_knockout' || type === 'modified_pool') {
+    phaseRows = `
+      <div class="legend-item"><span class="legend-dot dot-pool"></span><span>Skupinová fáze (seeding pro pavouka)</span></div>
+      <div class="legend-item"><span class="legend-dot dot-semifinal"></span><span>Předkolo / Osmifinále / Čtvrtfinále / Semifinále</span></div>
+      <div class="legend-item"><span class="legend-dot dot-final"></span><span>Finále / O 3. místo</span></div>
+      <div class="legend-item">↗ Všechny týmy postupují do pavouka (seeded podle pořadí ve skupině)</div>
+    `;
+  } else if (type === 'double_elimination') {
+    phaseRows = `
+      <div class="legend-item"><span class="legend-dot dot-pool"></span><span>Winners Bracket</span></div>
+      <div class="legend-item"><span class="legend-dot dot-losers"></span><span>Losers Bracket</span></div>
+      <div class="legend-item"><span class="legend-dot dot-final"></span><span>Grand Finále</span></div>
+    `;
+  } else if (type === 'round_robin') {
+    phaseRows = `<div class="legend-item"><span class="legend-dot dot-pool"></span><span>Každý s každým</span></div>`;
+  } else if (type === 'swiss') {
+    phaseRows = `<div class="legend-item"><span class="legend-dot dot-pool"></span><span>Swiss kola</span></div>`;
+  }
+
+  $('#scheduleLegend').innerHTML = `
+    ${phaseRows}
+    <div class="legend-item">⏸ Rozcvičení: ${WARMUP_MIN} min před prvním zápasem</div>
+    <div class="legend-item">⏱ Přestávka mezi zápasy: ${TRANSITION} min</div>
+    ${opt.phaseBreaks > 0 ? `<div class="legend-item">🔄 Přestávka před play-off: ${PHASE_BREAK} min</div>` : ''}
+  `;
+}
+
+// ─── Utilities ─────────────────────────────────────────────────────────────
+function withFocusPreserve(fn) {
+  const ae  = document.activeElement;
+  const key = ae && ae.dataset ? ae.dataset.key : null;
+  const ss  = ae && ae.tagName === 'INPUT' ? ae.selectionStart : null;
+  const se  = ae && ae.tagName === 'INPUT' ? ae.selectionEnd   : null;
+  fn();
+  if (key) {
+    const next = document.querySelector(`input[data-key="${key}"]`);
+    if (next) {
+      next.focus();
+      if (ss != null) {
+        try { next.setSelectionRange(ss, se != null ? se : ss); } catch (_) {}
+      }
+    }
+  }
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function showToast(msg, type = 'info') {
+  const t = document.createElement('div');
+  t.className = `toast toast-${type}`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  requestAnimationFrame(() => t.classList.add('show'));
+  setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); }, 3500);
+}
+
+function printSchedule()     { window.print(); }
+
+function copyScheduleText() {
+  const lines = [];
+  const opt = state.selectedOption;
+  lines.push(`${SPORTS[state.sport].label} — ${opt.tournamentName}`);
+  lines.push(`${state.teams.length} týmů · ${state.courts} kurtů · ${opt.matchFormat.shortName}`);
+  lines.push('');
+
+  let lastRound = null;
+  for (const m of state.schedule) {
+    if (m.roundName !== lastRound) {
+      lines.push(`\n--- ${m.roundName} ---`);
+      lastRound = m.roundName;
+    }
+    lines.push(`${formatTime(m.time)}  Kurt ${m.court}:  ${m.team1Label} vs ${m.team2Label}`);
+  }
+
+  navigator.clipboard.writeText(lines.join('\n')).then(() => {
+    showToast('Rozpis zkopírován do schránky ✓', 'success');
+  });
+}
+
+// ─── Event wiring ──────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  renderStep1();
+
+  $('#addTeam').addEventListener('click', addTeam);
+
+  $('#courts').addEventListener('input', e => {
+    state.courts = +e.target.value;
+    $('#courtsVal').textContent = e.target.value;
+  });
+
+  $('#startTime').addEventListener('change', e => { state.startTime = e.target.value; updateAvailableTime(); });
+  $('#endTime').addEventListener('change',   e => { state.endTime   = e.target.value; updateAvailableTime(); });
+
+  $$('input[name="mode"]').forEach(r => {
+    r.addEventListener('change', e => { state.mode = e.target.value; });
+  });
+
+  $('#btnToStep2').addEventListener('click',   generateAndShowOptions);
+  $('#btnBackStep1').addEventListener('click',  () => goToStep(1));
+  $('#btnBackStep2').addEventListener('click',  () => goToStep(2));
+  $('#btnPrint').addEventListener('click',      printSchedule);
+  $('#btnCopy').addEventListener('click',       copyScheduleText);
+  $('#btnRegenerate').addEventListener('click', () => goToStep(2));
+
+  goToStep(1);
+});

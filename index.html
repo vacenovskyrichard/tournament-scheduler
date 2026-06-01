@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TourneyMaker — Turnajový plánovač</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+
+<!-- ─── Header ─────────────────────────────────────────────────────────── -->
+<header class="app-header">
+  <div class="app-logo">🏆</div>
+  <div>
+    <div class="app-title">TourneyMaker</div>
+    <div class="app-subtitle">Turnajový plánovač · Beach volejbal & další sporty</div>
+  </div>
+</header>
+
+<main class="main-content">
+
+  <!-- ─── Step indicator ──────────────────────────────────────────────── -->
+  <nav class="steps-nav">
+    <div class="step-indicator" id="ind1">
+      <span class="step-num">1</span>
+      <span>Nastavení</span>
+    </div>
+    <div class="step-connector"></div>
+    <div class="step-indicator upcoming" id="ind2">
+      <span class="step-num">2</span>
+      <span>Výběr formátu</span>
+    </div>
+    <div class="step-connector"></div>
+    <div class="step-indicator upcoming" id="ind3">
+      <span class="step-num">3</span>
+      <span>Rozpis</span>
+    </div>
+  </nav>
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- STEP 1 — Setup                                                      -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div id="step1" class="step-panel">
+
+    <!-- Sport -->
+    <div class="card">
+      <div class="card-title">🏅 Sport</div>
+      <div id="sportSelector"></div>
+    </div>
+
+    <!-- Teams -->
+    <div class="card">
+      <div class="team-list-header">
+        <div class="card-title" style="margin:0">👥 Týmy</div>
+        <span id="teamCount"></span>
+      </div>
+      <div id="teamList"></div>
+      <p id="teamWarning" class="hidden"></p>
+      <button class="btn-add" id="addTeam">+ Přidat tým</button>
+    </div>
+
+    <!-- Courts & Time -->
+    <div class="card">
+      <div class="card-title">⚙️ Parametry turnaje</div>
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label class="form-label">Počet kurtů</label>
+          <div class="courts-control">
+            <input type="range" id="courts" min="1" max="8" value="2" />
+            <span id="courtsVal">2</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="startTime">Začátek</label>
+          <input type="time" id="startTime" class="form-input" value="09:00" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="endTime">Konec</label>
+          <input type="time" id="endTime" class="form-input" value="13:00" />
+        </div>
+
+      </div>
+      <p id="availableTime" style="margin-top:12px;"></p>
+    </div>
+
+    <!-- Output mode -->
+    <div class="card">
+      <div class="card-title">📋 Výstupní formát</div>
+      <div class="mode-selector">
+        <label class="mode-option">
+          <input type="radio" name="mode" value="print" checked />
+          <span>🖨 Tisknout / PDF — prázdná pole pro ruční zápis</span>
+        </label>
+        <label class="mode-option">
+          <input type="radio" name="mode" value="online" />
+          <span>💻 Online zápis — zadávání výsledků přímo v prohlížeči</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btnToStep2">
+        Vygenerovat možnosti →
+      </button>
+    </div>
+
+  </div><!-- /step1 -->
+
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- STEP 2 — Options                                                    -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div id="step2" class="step-panel hidden">
+
+    <div class="card">
+      <div class="card-title">🎯 Možnosti formátu turnaje</div>
+      <p style="color:var(--text-m);font-size:.88rem;margin-bottom:16px;">
+        Níže jsou všechny formáty, které se vejdou do zadaného času a počtu kurtů.
+        Každá karta ukazuje <strong>minimální a maximální počet zápasů na tým</strong>
+        (minimum = vypadnutí co nejdříve, maximum = cesta až do finále).
+      </p>
+      <div id="optionsList"></div>
+    </div>
+
+    <div class="btn-row no-print">
+      <button class="btn btn-secondary" id="btnBackStep1">← Zpět na nastavení</button>
+    </div>
+
+  </div><!-- /step2 -->
+
+
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <!-- STEP 3 — Schedule                                                   -->
+  <!-- ═══════════════════════════════════════════════════════════════════ -->
+  <div id="step3" class="step-panel hidden">
+
+    <!-- Header -->
+    <div class="schedule-header-card">
+      <div id="scheduleTitle"></div>
+      <div id="scheduleSubtitle"></div>
+      <div class="pills" id="scheduleSummary"></div>
+    </div>
+
+    <!-- Action buttons -->
+    <div class="btn-row no-print" style="margin-bottom:16px;">
+      <button class="btn btn-primary" id="btnPrint">🖨 Tisk / PDF</button>
+      <button class="btn btn-secondary" id="btnCopy">📋 Kopírovat text</button>
+      <button class="btn btn-secondary" id="btnRegenerate">↩ Změnit formát</button>
+      <button class="btn btn-secondary" id="btnBackStep2">← Nastavení</button>
+    </div>
+
+    <!-- Schedule table -->
+    <div class="card">
+      <div class="card-title">🗓 Časový rozpis</div>
+      <div class="table-wrapper">
+        <table class="schedule-table">
+          <thead id="scheduleHead"></thead>
+          <tbody id="scheduleBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Group standings -->
+    <div id="groupStandings"></div>
+
+    <!-- Bracket view -->
+    <div id="bracketView"></div>
+
+    <!-- Legend -->
+    <div class="card">
+      <div class="card-title" style="font-size:.9rem;">ℹ️ Legenda & pravidla</div>
+      <div class="schedule-legend" id="scheduleLegend"></div>
+    </div>
+
+  </div><!-- /step3 -->
+
+</main><!-- /main-content -->
+
+<script src="js/scheduler.js"></script>
+<script src="js/app.js"></script>
+
+</body>
+</html>
