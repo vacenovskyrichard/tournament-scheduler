@@ -464,6 +464,13 @@ function renderGroupStandings() {
   let html = '<div class="card"><div class="card-title">📊 Skupinové tabulky</div><div class="groups-stack">';
 
   for (const grp of withStandings) {
+    // 4-team modified-format groups get a mini bracket instead of a cross-table:
+    // M1 (1v4), M2 (2v3), then M3 (winners → 1./2.) and M4 (losers → 3./4.).
+    if (grp.groupType === 'mod4') {
+      html += renderModMiniBracket(grp, { fmtId, numSets, setLabels, isOnline, seedOf });
+      continue;
+    }
+
     const teams = grp.teams;
     const N     = teams.length;
 
@@ -587,7 +594,7 @@ function renderGroupStandings() {
   el.innerHTML = html;
 
   if (isOnline) {
-    el.querySelectorAll('.ct-score-inp').forEach(inp => {
+    el.querySelectorAll('.ct-score-inp, .mb-score-inp').forEach(inp => {
       inp.addEventListener('input', e => {
         const v = e.target.value;
         if (v === '' || /^\d{1,2}$/.test(v)) {
@@ -597,6 +604,104 @@ function renderGroupStandings() {
       });
     });
   }
+}
+
+// Mini-bracket renderer for 4-team modified pool groups.
+// Layout: M1 (1v4) + M2 (2v3) on the left, M3 (Finále) + M4 (O 3. místo) on the right.
+function renderModMiniBracket(grp, ctx) {
+  const { fmtId, numSets, setLabels, isOnline, seedOf } = ctx;
+  const teams = grp.teams;
+  const lbl   = grp.label;
+  const scores = state.scores;
+  const schedule = state.schedule;
+
+  const find = (a, b) => schedule.find(m => m.team1Label === a && m.team2Label === b);
+  const m1 = find(teams[0], teams[3]);                                // 1 vs 4
+  const m2 = find(teams[1], teams[2]);                                // 2 vs 3
+  const m3 = find(`Vít. M1 sk.${lbl}`, `Vít. M2 sk.${lbl}`);          // winners → 1./2.
+  const m4 = find(`Por. M1 sk.${lbl}`, `Por. M2 sk.${lbl}`);          // losers  → 3./4.
+
+  // Resolve placeholder names from M1/M2 results (used in M3/M4 + final ranks)
+  const w1 = m1 ? matchWinner(scores, m1.id, fmtId) : 0;
+  const w2 = m2 ? matchWinner(scores, m2.id, fmtId) : 0;
+  const winM1 = w1 === 1 ? teams[0] : w1 === 2 ? teams[3] : null;
+  const losM1 = w1 === 1 ? teams[3] : w1 === 2 ? teams[0] : null;
+  const winM2 = w2 === 1 ? teams[1] : w2 === 2 ? teams[2] : null;
+  const losM2 = w2 === 1 ? teams[2] : w2 === 2 ? teams[1] : null;
+
+  const scoreCells = (match, team1Idx, team2Idx) => {
+    if (!match) return ['', ''];
+    const cells = [[], []];
+    [team1Idx, team2Idx].forEach((teamN, side) => {
+      for (let s = 0; s < numSets; s++) {
+        const key = `${match.id}_${teamN}_${s}`;
+        const val = scores[key] ?? '';
+        cells[side].push(isOnline
+          ? `<input type="number" min="0" max="99" class="mb-score-inp"
+                 data-key="${key}" value="${val}" title="${setLabels[s]}">`
+          : `<span class="mb-score-box" title="${setLabels[s]}"></span>`);
+      }
+    });
+    return cells.map(c => c.join(''));
+  };
+
+  // Renders one match row. `seedTeam1/2` are optional (only used for M1/M2).
+  const matchRow = (match, label1, label2, badge, name1, name2, seedTeam1, seedTeam2, resolvedName1, resolvedName2) => {
+    const [s1Html, s2Html] = scoreCells(match, 1, 2);
+    const matchWinSide = match ? matchWinner(scores, match.id, fmtId) : 0;
+    const teamRow = (name, label, seed, isWinner, scoreHtml) => `
+      <div class="mb-team ${isWinner ? 'mb-team-won' : ''}">
+        <div class="mb-team-info">
+          <span class="mb-team-label">${escapeHtml(label)}${seed != null ? ' · nasazení ' + seed : ''}</span>
+          <span class="mb-team-name">${escapeHtml(name || '')}</span>
+        </div>
+        <div class="mb-scores">${scoreHtml}</div>
+      </div>`;
+    return `
+      <div class="mb-match">
+        <div class="mb-badge">${badge}</div>
+        ${teamRow(resolvedName1 != null ? resolvedName1 : name1, label1, seedTeam1, matchWinSide === 1, s1Html)}
+        ${teamRow(resolvedName2 != null ? resolvedName2 : name2, label2, seedTeam2, matchWinSide === 2, s2Html)}
+      </div>`;
+  };
+
+  // Final ranking (winner of M3 = 1., loser = 2., winner of M4 = 3., loser of M4 = 4.)
+  const wm3 = m3 ? matchWinner(scores, m3.id, fmtId) : 0;
+  const wm4 = m4 ? matchWinner(scores, m4.id, fmtId) : 0;
+  const rank1 = wm3 === 1 ? winM1 : wm3 === 2 ? winM2 : '';
+  const rank2 = wm3 === 1 ? winM2 : wm3 === 2 ? winM1 : '';
+  const rank3 = wm4 === 1 ? losM1 : wm4 === 2 ? losM2 : '';
+  const rank4 = wm4 === 1 ? losM2 : wm4 === 2 ? losM1 : '';
+
+  // Determine court(s) for header
+  const courts = [...new Set([m1, m2, m3, m4].filter(Boolean).map(m => m.court))].sort();
+  const courtLabel = courts.length === 1 ? `(kurt ${courts[0]})` :
+                     courts.length > 1   ? `(kurty ${courts.join(', ')})` : '';
+
+  // Match order labels — show schedule order
+  const orderItems = [m1, m2, m3, m4].filter(Boolean).map(m => {
+    const tag = m === m1 ? 'M1' : m === m2 ? 'M2' : m === m3 ? 'M3' : 'M4';
+    return `<span>${formatTime(m.time)} ${tag}</span>`;
+  });
+
+  return `
+    <div class="mb-wrap">
+      <div class="mb-header">Skupina ${lbl} <span class="mb-header-sub">(mod. 4 týmy)</span> <span class="mb-header-court">${courtLabel}</span></div>
+      <div class="mb-grid">
+        ${matchRow(m1, `${lbl}1`, `${lbl}4`, 'M1', teams[0], teams[3], seedOf(teams[0]), seedOf(teams[3]))}
+        ${matchRow(m2, `${lbl}2`, `${lbl}3`, 'M2', teams[1], teams[2], seedOf(teams[1]), seedOf(teams[2]))}
+        ${matchRow(m3, 'Vít. M1', 'Vít. M2', 'M3 — Finále',     '', '', null, null, winM1, winM2)}
+        ${matchRow(m4, 'Por. M1', 'Por. M2', 'M4 — O 3. místo', '', '', null, null, losM1, losM2)}
+      </div>
+      <div class="mb-podium">
+        <div class="mb-rank">🥇 <strong>1.</strong> ${escapeHtml(rank1 || '_____')}</div>
+        <div class="mb-rank">🥈 <strong>2.</strong> ${escapeHtml(rank2 || '_____')}</div>
+        <div class="mb-rank">🥉 <strong>3.</strong> ${escapeHtml(rank3 || '_____')}</div>
+        <div class="mb-rank">🥔 <strong>4.</strong> ${escapeHtml(rank4 || '_____')}</div>
+      </div>
+      ${orderItems.length ? `<div class="mb-order"><strong>Pořadí zápasů:</strong> ${orderItems.join('&nbsp;&nbsp;&nbsp;')}</div>` : ''}
+    </div>
+  `;
 }
 
 // ─── Bracket visualization ─────────────────────────────────────────────────
