@@ -89,6 +89,8 @@ Seznam karet, jedna pro každý vyhovující formát (`generateOptions`). První
 - **Časový rozpis** — tabulka (viz §10).
 - **Skupinové tabulky** (`#groupStandings`) — jen pro `pool_knockout` a `modified_pool` (§11).
 - **Pavouk** (`#bracketView`) — jen pokud existují KO zápasy (§12).
+- **Swiss view** (`#swissView`) — jen pro `swiss` (§6.6); přebírá krok 3 a skryje
+  časový rozpis (`#scheduleCard`), skupiny, pavouka i legendu (`#legendCard`).
 - **Legenda & pravidla** (`.no-print` se v tisku skrývá).
 
 Na kroku 3 dostává `.main-content` třídu `wide-content` (širší layout pro pavouka).
@@ -199,9 +201,60 @@ Společný tvar výstupu (klíče používané dál): `id`, `type`, `name`, `des
 ### 6.5 `swiss` — Swiss systém (`calcSwiss`, jen N ≥ 4, **pouze online režim**)
 - Počet kol = `ceil(log2(N)) + (N>8 ? 1 : 0)`. Páruje týmy se stejným počtem výher,
   nikdo nevypadá. `minMatchesPerTeam = maxMatchesPerTeam = počet kol`. `phaseBreaks = 0`.
-- `onlineOnly: true` — v `print` režimu se přeskočí.
-- Data: `swissRounds`. Živé párování dalšího kola: `swissPairNextRound(standings, history)`
-  (řadí dle bodů → Buchholz → jméno, nepáruje znovu odehrané, lichý dostane BYE).
+- `onlineOnly: true` — v `print` režimu se přeskočí (`calcSwiss` se v `print` nevolá a
+  generateOptions navíc filtruje `onlineOnly`). **Swiss je tedy vždy interaktivní/online.**
+- Data: `swissRounds`. **Swiss je dynamický** — nestaví se přes `buildSchedule`; viz §6.6.
+
+### 6.6 Swiss — interaktivní online tok (klíčová logika)
+
+Párování kola N závisí na výsledcích kol 1..N−1, takže Swiss se **negeneruje dopředu**.
+Aplikace drží kola jako zdroj pravdy v `state.swiss` a generuje další kolo na vyžádání.
+
+**Stav `state.swiss`** (pro `swiss` v online režimu; jinak `null`):
+```js
+{
+  teams,        // [...názvy týmů] — fixní seznam pro tabulku
+  totalRounds,  // = option.swissRounds (plánovaný počet kol)
+  courts,       // počet kurtů (pro přiřazení kurtů zápasům)
+  fmtId,        // id formátu zápasu (pro skórování)
+  matchSeq,     // čítač id zápasů (od 1, napříč všemi koly)
+  rounds: [     // pole vygenerovaných kol
+    { matches: [{ id, t1, t2, court }], byeTeam: name|null }
+  ]
+}
+```
+`id` zápasu je stabilní integer od 1 (klíč skóre, viz §12). Kurt zápasu = `(i % courts) + 1`.
+
+**Inicializace (`initSwiss`)** při výběru Swiss formátu: vynuluje skóre, vytvoří
+`state.swiss` a vygeneruje **kolo 1** (`swissInitialPairing`).
+
+**Párování 1. kola (`swissInitialPairing(teams)`)**: pole se rozdělí napůl a páruje se
+horní vs dolní polovina (nasazení 1 vs ⌈n/2⌉+1, …). Lichý počet → poslední nasazený
+dostane **bye**. Vrací `{ pairs, byeTeam }`.
+
+**Párování dalšího kola (`swissPairNextRound(standings, history, byeHistory)`)** —
+standings je už seřazené nejlepší→nejhorší:
+- Lichý počet → bye dostane **nejníže postavený tým, který bye ještě neměl** (fallback:
+  kdokoli, když už všichni měli).
+- **Backtracking** najde bezrematchové párování, kdykoli existuje: horní tým se páruje
+  s nejbližším povoleným soupeřem (Swiss princip) a rekurzivně dál; při zaseknutí se
+  vrací zpět. Greedy fallback (povolí rematch) se použije **jen** když bezrematchové
+  párování neexistuje. (Pozn.: prosté greedy odshora by občas vynutilo zbytečný rematch.)
+- Vrací `{ pairs, byeTeam }`.
+
+**Tabulka (`computeSwissStandings(swiss, scores, fmtId)`)**:
+- Body: **1 za výhru**, **bye = výhra (+1 bod)**. Sleduje se V/P/bye/odehráno/rozdíl míčů.
+- **Buchholz** = součet bodů soupeřů (po dopočtení bodů všech).
+- Řazení (tiebreaky): body desc → Buchholz desc → rozdíl míčů desc → jméno.
+- Rozdíl míčů `swissMatchDiff` = součet (skóre t1 − skóre t2) přes zadané sety.
+
+**Generování dalšího kola (`generateNextSwissRound`)**: povoleno jen když je
+**aktuální kolo kompletní** (každý zápas má rozhodnutého vítěze) a `rounds.length < totalRounds`.
+Spočítá standings, sestaví `history` (všechny odehrané dvojice) a `byeHistory`, zavolá
+`swissPairNextRound`, přidá nové kolo, uloží stav a překreslí.
+
+**Konec turnaje**: po vygenerování všech `totalRounds` kol a doplnění výsledků posledního
+kola se zobrazí konečné pořadí (medaile 🥇🥈🥉 u prvních tří).
 
 ---
 
@@ -277,8 +330,9 @@ Vrací pole `schedule` objektů zápasů. `matchId` je **sekvenční integer od 
 - **double_elimination**: WB 1. kolo (s byes), LB 1. kolo, pak střídavě WB a LB kola
   pomocí placeholderů `WB Vít.{mc}`, `WB Por.{mc}`, `LB: Por.{mc}`, `LB Vít.{mc}`,
   nakonec `LB Finále` a `Grand Finále` (`WB Vítěz` vs `LB Vítěz`).
-- **swiss**: 1. kolo páruje `t[i]` vs `t[i+half]` (lichý → BYE), další kola placeholdery
-  `Swiss Vít./Por. {n}`.
+- **swiss**: `buildSchedule` Swiss **nepoužívá** — Swiss je dynamický a staví se
+  interaktivně přes `state.swiss` (viz §6.6). `selectOption` pro `type === 'swiss'`
+  volá `initSwiss()` místo `buildSchedule()`.
 
 ### Pavouk (`pushKnockout(seedLabels, pushSlot)`)
 Single-elim, do kterého **vstupují všechny** seedLabely se standardním nasazením.
@@ -358,8 +412,9 @@ Textový souhrn („21:18 19:21 10:8" nebo „21:15"); přeskakuje nevyplněné 
 - Klíč: `tourneymaker.state.v1`. Ukládá se **snapshot vstupů**, ne odvozený rozpis
   (ten obsahuje `Date` objekty, které nepřežijí JSON).
 - Snapshot: `{ v:1, step, sport, teams, courts, startTime, endTime, mode, scores,
-  selectedOptionIndex }`. `selectedOptionIndex` = index `selectedOption` v `options`
-  (nebo `null`).
+  selectedOptionIndex, swiss }`. `selectedOptionIndex` = index `selectedOption` v `options`
+  (nebo `null`). `swiss` = `state.swiss` (nebo `null`) — **Swiss kola se ukládají
+  explicitně**, protože nejsou reprodukovatelná z čistých vstupů (závisí na výsledcích).
 - **`saveState()`** se volá při každé mutaci: změna sportu, přejmenování/přidání/odebrání
   týmu, kurty, časy, režim, přechod kroku (`goToStep`), výběr formátu, zadání skóre.
   Selhání (private mode / plno) se tiše ignoruje.
@@ -369,6 +424,8 @@ Textový souhrn („21:18 19:21 10:8" nebo „21:15"); přeskakuje nevyplněné 
   rozpis přes `restoreSelectedOption(idx)` — **bez mazání skóre** (na rozdíl od
   `selectOption`, který skóre nuluje). Díky deterministickému `matchId` klíče skóre sedí.
   Guard: když index nevyjde, spadne na krok 2; když se nic nevejde, na krok 1.
+  **Swiss** se obnovuje zvlášť: `state.swiss = snap.swiss` (kola se nepřegenerovávají,
+  jsou zdrojem pravdy).
 - **`resetAll()`** (tlačítko „🗑 Začít načisto"): vymaže storage, vrátí state na výchozí,
   vykreslí krok 1, toast.
 
@@ -423,6 +480,10 @@ CSS proměnné (`:root`):
 10. Skóre v pavouku (online) jsou inputy s třídou `.bm-score-inp` a atributem
     `data-key` — handler musí poslouchat na **tomto** selektoru (historicky tu byl bug
     se selektorem `.bm-slash`, kvůli kterému zadávání v pavouku nefungovalo).
+11. **Swiss** (§6.6): další kolo lze vygenerovat jen když je aktuální kolo kompletní;
+    žádné rematche (pokud se lze vyhnout); každý tým max. jeden bye; bye = výhra (+1 bod);
+    `state.swiss` (kola) je zdroj pravdy a ukládá se do `localStorage` (na rozdíl od
+    ostatních formátů se NEpřegenerovává z čistých vstupů). Stop po `totalRounds` kolech.
 
 ---
 

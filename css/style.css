@@ -922,3 +922,82 @@ input[type="range"] {
   .ct-order         { font-size: .72rem; padding: 6px 10px 8px; }
   .ct-header        { font-size: .9rem; padding: 5px 10px; }
 }
+
+/* ─── Swiss system (interactive online view) ────────────────────────────── */
+.sw-standings {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .88rem;
+}
+.sw-standings th {
+  background: var(--blue-d); color: #fff;
+  padding: 6px 8px; text-align: center; font-weight: 600;
+}
+.sw-standings th.sw-th-team { text-align: left; }
+.sw-standings td {
+  padding: 6px 8px; text-align: center;
+  border-bottom: 1px solid var(--border);
+}
+.sw-standings .sw-rank      { color: var(--text-m); font-weight: 700; width: 36px; }
+.sw-standings .sw-team-name { text-align: left; font-weight: 600; }
+.sw-standings .sw-pts       { color: var(--blue); font-weight: 800; }
+.sw-standings tr.sw-rank-1  { background: var(--sand-l); }
+
+.sw-round.sw-round-done { border-left: 3px solid var(--green); }
+.sw-round-of  { color: var(--text-m); font-weight: 400; font-size: .85rem; }
+.sw-done-badge {
+  margin-left: 8px; font-size: .72rem; color: var(--green);
+  background: var(--green-l); padding: 2px 8px; border-radius: 999px; font-weight: 700;
+}
+
+.sw-match {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.sw-match:last-child { border-bottom: none; }
+.sw-court {
+  flex: 0 0 auto;
+  font-size: .72rem; color: var(--text-m);
+  background: var(--gray-l); padding: 2px 8px; border-radius: 6px;
+  min-width: 58px; text-align: center;
+}
+.sw-side {
+  flex: 1 1 120px;
+  font-weight: 600;
+}
+.sw-side-l { text-align: right; }
+.sw-side-r { text-align: left; }
+.sw-won { color: var(--green); font-weight: 800; }
+.sw-scores { flex: 0 0 auto; display: flex; gap: 3px; }
+.sw-colon { flex: 0 0 auto; color: var(--text-m); font-weight: 700; }
+.sw-score-inp {
+  width: 30px; height: 24px;
+  padding: 0 2px;
+  border: 1.5px solid #94a3b8; border-radius: 4px;
+  font-size: .85rem; text-align: center; outline: none;
+  background: var(--white);
+}
+.sw-score-inp:focus { border-color: var(--blue); }
+
+.sw-bye {
+  padding: 8px 4px;
+  font-size: .88rem; color: var(--text-m);
+  background: var(--sand-l); border-radius: 8px; margin-top: 4px;
+}
+.sw-status {
+  font-size: .85rem; color: var(--text-m);
+  padding: 8px 2px;
+}
+.sw-status-done {
+  font-size: 1rem; font-weight: 700; color: var(--green);
+  background: var(--green-l); padding: 12px 16px; border-radius: var(--radius);
+}
+
+@media (max-width: 560px) {
+  .sw-side { flex-basis: 80px; font-size: .85rem; }
+  .sw-court { min-width: 0; }
+}

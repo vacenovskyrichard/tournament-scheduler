@@ -617,22 +617,8 @@ function buildSchedule(option, teamNames, courts, startTime) {
   }
 
   // ── Swiss ────────────────────────────────────────────────────────────────
-  if (option.type === 'swiss') {
-    const n    = teamNames.length;
-    const half = Math.floor(n / 2);
-    for (let r = 0; r < option.swissRounds; r++) {
-      const round = [];
-      if (r === 0) {
-        for (let i = 0; i < half; i++) round.push([t[i], t[i + half]]);
-        if (n % 2 !== 0) round.push([t[n - 1], 'BYE']);
-      } else {
-        for (let i = 0; i < half; i++) {
-          round.push([`Swiss Vít./Por. ${2 * i + 1}`, `Swiss Vít./Por. ${2 * i + 2}`]);
-        }
-      }
-      pushSlot(round, `Swiss — kolo ${r + 1}`, 'pool');
-    }
-  }
+  // Swiss is dynamic and online-only; it is NOT built here. The app builds it
+  // interactively via state.swiss (see initSwiss / generateNextSwissRound).
 
   return schedule;
 }
@@ -748,42 +734,127 @@ function pushKnockout(seedLabels, pushSlot) {
   }
 }
 
-// ─── Swiss pairing (for online mode live pairing) ─────────────────────────
-function swissPairNextRound(standings, history) {
-  const sorted = [...standings].sort((a, b) =>
-    b.points - a.points || b.buchholz - a.buchholz || a.name.localeCompare(b.name)
-  );
-  const used  = new Set();
-  const pairs = [];
-  const historySet = new Set(history.map(([a, b]) => `${a}|${b}`));
-  const played = (x, y) => historySet.has(`${x}|${y}`) || historySet.has(`${y}|${x}`);
+// ─── Swiss system (online interactive) ─────────────────────────────────────
+// Swiss is inherently dynamic: each round's pairings depend on the results so
+// far, so it is NOT pre-built by buildSchedule. The app holds the rounds as the
+// source of truth and calls these pure helpers to pair and rank.
 
-  for (let i = 0; i < sorted.length; i++) {
-    if (used.has(i)) continue;
-    let found = false;
-    for (let j = i + 1; j < sorted.length; j++) {
-      if (!used.has(j) && !played(sorted[i].name, sorted[j].name)) {
-        pairs.push([sorted[i].name, sorted[j].name]);
-        used.add(i); used.add(j);
-        found = true;
-        break;
-      }
+// Round 1 seeding: split the (seed-ordered) field in half and pair top vs
+// bottom — seed 1 vs seed ⌈n/2⌉+1, etc. Odd field → last seed gets the bye.
+// Returns { pairs: [[a,b],…], byeTeam: name|null }.
+function swissInitialPairing(teams) {
+  const n = teams.length;
+  const half = Math.floor(n / 2);
+  const pairs = [];
+  for (let i = 0; i < half; i++) pairs.push([teams[i], teams[i + half]]);
+  return { pairs, byeTeam: n % 2 !== 0 ? teams[n - 1] : null };
+}
+
+// Pair the next round from current standings (already sorted best→worst).
+//  • Odd field → bye to the lowest-ranked team that hasn't had one yet.
+//  • Backtracking search finds a rematch-free pairing whenever one exists,
+//    always trying the closest-ranked allowed opponent first (Swiss principle).
+//    Greedy fallback (allows a rematch) only if NO rematch-free pairing exists.
+// `history` = list of [a,b] already-played pairs. `byeHistory` = Set of names
+// that already received a bye. Returns { pairs, byeTeam }.
+function swissPairNextRound(standings, history, byeHistory = new Set()) {
+  const list = standings.map(s => s.name);
+
+  const played = new Set();
+  for (const [a, b] of history) { played.add(`${a}|${b}`); played.add(`${b}|${a}`); }
+
+  let byeTeam = null;
+  if (list.length % 2 !== 0) {
+    for (let i = list.length - 1; i >= 0; i--) {
+      if (!byeHistory.has(list[i])) { byeTeam = list.splice(i, 1)[0]; break; }
     }
-    if (!found) {
-      for (let j = i + 1; j < sorted.length; j++) {
-        if (!used.has(j)) {
-          pairs.push([sorted[i].name, sorted[j].name]);
-          used.add(i); used.add(j);
-          break;
-        }
+    if (byeTeam == null) byeTeam = list.pop();   // everyone already had a bye
+  }
+
+  // Backtracking: pair the top remaining team with the closest-ranked opponent
+  // it hasn't met, recursing. Returns a rematch-free perfect matching or null.
+  const search = (arr) => {
+    if (arr.length === 0) return [];
+    const first = arr[0];
+    for (let i = 1; i < arr.length; i++) {
+      if (played.has(`${first}|${arr[i]}`)) continue;
+      const rest = arr.slice(1, i).concat(arr.slice(i + 1));
+      const sub = search(rest);
+      if (sub) return [[first, arr[i]], ...sub];
+    }
+    return null;
+  };
+
+  let pairs = search(list);
+  if (!pairs) {
+    // No rematch-free pairing exists — greedy fallback (may repeat a matchup).
+    pairs = [];
+    const used = new Array(list.length).fill(false);
+    for (let i = 0; i < list.length; i++) {
+      if (used[i]) continue;
+      let j = -1;
+      for (let k = i + 1; k < list.length; k++) {
+        if (!used[k] && !played.has(`${list[i]}|${list[k]}`)) { j = k; break; }
       }
+      if (j === -1) for (let k = i + 1; k < list.length; k++) if (!used[k]) { j = k; break; }
+      if (j === -1) continue;
+      used[i] = used[j] = true;
+      pairs.push([list[i], list[j]]);
     }
   }
-  if (sorted.length % 2 !== 0) {
-    const unmatched = sorted.find((_, i) => !used.has(i));
-    if (unmatched) pairs.push([unmatched.name, 'BYE']);
+  return { pairs, byeTeam };
+}
+
+// Point differential of a match (team1 total − team2 total across entered sets).
+function swissMatchDiff(scores, matchId, fmtId) {
+  const sets = setsForFormat(fmtId);
+  let d = 0;
+  for (let i = 0; i < sets; i++) {
+    const a = scores[`${matchId}_1_${i}`];
+    const b = scores[`${matchId}_2_${i}`];
+    if (a == null || a === '' || b == null || b === '') continue;
+    const na = parseInt(a, 10), nb = parseInt(b, 10);
+    if (!Number.isNaN(na) && !Number.isNaN(nb)) d += na - nb;
   }
-  return pairs;
+  return d;
+}
+
+// Compute standings across all played Swiss rounds.
+//   points: 1 per win (a bye counts as a win), tiebreaks: Buchholz (sum of
+//   opponents' points) → point differential → name.
+// `swiss` = { teams, rounds:[{matches:[{id,t1,t2}], byeTeam}] }.
+function computeSwissStandings(swiss, scores, fmtId) {
+  const stats = new Map();
+  const ensure = (name) => {
+    if (!stats.has(name)) {
+      stats.set(name, { name, points: 0, wins: 0, losses: 0, byes: 0, played: 0, diff: 0, opps: [] });
+    }
+    return stats.get(name);
+  };
+  (swiss.teams || []).forEach(ensure);
+
+  for (const round of swiss.rounds) {
+    if (round.byeTeam) { const s = ensure(round.byeTeam); s.points += 1; s.byes += 1; }
+    for (const m of round.matches) {
+      const s1 = ensure(m.t1), s2 = ensure(m.t2);
+      s1.opps.push(m.t2); s2.opps.push(m.t1);
+      const d = swissMatchDiff(scores, m.id, fmtId);
+      s1.diff += d; s2.diff -= d;
+      const w = matchWinner(scores, m.id, fmtId);
+      if (w === 0) continue;
+      s1.played++; s2.played++;
+      if (w === 1) { s1.wins++; s1.points++; s2.losses++; }
+      else         { s2.wins++; s2.points++; s1.losses++; }
+    }
+  }
+
+  for (const s of stats.values()) {
+    s.buchholz = s.opps.reduce((acc, o) => acc + (stats.get(o)?.points || 0), 0);
+  }
+
+  return [...stats.values()].sort((a, b) =>
+    b.points - a.points || b.buchholz - a.buchholz || b.diff - a.diff || a.name.localeCompare(b.name)
+  );
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────

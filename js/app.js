@@ -13,6 +13,7 @@ const state = {
   selectedOption: null,
   schedule: [],
   scores: {},
+  swiss: null,        // Swiss state (online Swiss only): { totalRounds, courts, fmtId, matchSeq, rounds }
 };
 
 const SPORTS = {
@@ -46,6 +47,8 @@ function saveState() {
         state.selectedOption && state.options.length
           ? state.options.indexOf(state.selectedOption)
           : null,
+      // Swiss rounds are dynamic (not reproducible from inputs), so persist them.
+      swiss:     state.swiss,
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
   } catch (_) {
@@ -291,17 +294,202 @@ function buildScheduleForSelected() {
 
 function selectOption(idx) {
   state.selectedOption = state.options[idx];
-  state.schedule = buildScheduleForSelected();
-  state.scores   = {};
+  if (state.selectedOption.type === 'swiss') {
+    initSwiss(state.selectedOption);          // dynamic — builds round 1, resets scores
+  } else {
+    state.swiss    = null;
+    state.schedule = buildScheduleForSelected();
+    state.scores   = {};
+  }
   renderSchedule();
   goToStep(3);
 }
 
 // Like selectOption, but keeps the already-restored scores (used on page load).
+// Swiss is restored separately in restoreState() from the persisted rounds.
 function restoreSelectedOption(idx) {
   state.selectedOption = state.options[idx];
+  state.swiss = null;
   state.schedule = buildScheduleForSelected();
   renderSchedule();
+}
+
+// ─── Swiss system (online interactive) ──────────────────────────────────────
+function initSwiss(option) {
+  state.scores = {};
+  state.schedule = [];
+  state.swiss = {
+    teams:       [...state.teams],
+    totalRounds: option.swissRounds,
+    courts:      state.courts,
+    fmtId:       option.matchFormat.id,
+    matchSeq:    1,
+    rounds:      [],
+  };
+  const { pairs, byeTeam } = swissInitialPairing(state.swiss.teams);
+  swissAppendRound(pairs, byeTeam);
+}
+
+// Turn name pairs into match objects with stable sequential ids and append as a
+// new round. Courts cycle 1..C; bye (if any) is recorded on the round.
+function swissAppendRound(pairs, byeTeam) {
+  const sw = state.swiss;
+  const matches = pairs.map((p, i) => ({
+    id:    sw.matchSeq++,
+    t1:    p[0],
+    t2:    p[1],
+    court: (i % sw.courts) + 1,
+  }));
+  sw.rounds.push({ matches, byeTeam: byeTeam || null });
+}
+
+function swissRoundComplete(round) {
+  return round.matches.every(m => matchWinner(state.scores, m.id, state.swiss.fmtId) !== 0);
+}
+
+function generateNextSwissRound() {
+  const sw = state.swiss;
+  if (!sw) return;
+  if (sw.rounds.length >= sw.totalRounds) {
+    showToast('Všechna plánovaná kola už byla vygenerována.', 'info');
+    return;
+  }
+  const last = sw.rounds[sw.rounds.length - 1];
+  if (!swissRoundComplete(last)) {
+    showToast('Nejdřív doplň všechny výsledky aktuálního kola.', 'error');
+    return;
+  }
+
+  const standings  = computeSwissStandings(sw, state.scores, sw.fmtId);
+  const history     = [];
+  const byeHistory = new Set();
+  for (const r of sw.rounds) {
+    if (r.byeTeam) byeHistory.add(r.byeTeam);
+    for (const m of r.matches) history.push([m.t1, m.t2]);
+  }
+  const { pairs, byeTeam } = swissPairNextRound(standings, history, byeHistory);
+  swissAppendRound(pairs, byeTeam);
+  saveState();
+  renderSwissView();
+  showToast(`Kolo ${sw.rounds.length} vygenerováno.`, 'success');
+}
+
+// Per-set score inputs for one side of a Swiss match.
+function swissScoreInputs(matchId, fmtId, side) {
+  const numSets = setsForFormat(fmtId);
+  const labels  = numSets === 1 ? [''] : ['1.set', '2.set', 'TB'];
+  let html = '';
+  for (let s = 0; s < numSets; s++) {
+    const key = `${matchId}_${side}_${s}`;
+    const val = state.scores[key] ?? '';
+    html += `<input type="number" min="0" max="99" class="sw-score-inp"
+                    data-key="${key}" value="${val}" title="${labels[s]}" placeholder="—">`;
+  }
+  return html;
+}
+
+function renderSwissView() {
+  const sw  = state.swiss;
+  const el  = $('#swissView');
+  if (!sw) { el.classList.add('hidden'); el.innerHTML = ''; return; }
+  el.classList.remove('hidden');
+
+  const fmtId      = sw.fmtId;
+  const standings  = computeSwissStandings(sw, state.scores, fmtId);
+  const roundsDone = sw.rounds.length;
+  const allRounds  = roundsDone >= sw.totalRounds;
+  const lastDone   = swissRoundComplete(sw.rounds[roundsDone - 1]);
+  const finished   = allRounds && lastDone;
+  const rankByName = new Map(standings.map((s, i) => [s.name, i + 1]));
+
+  // ── Standings table ──
+  let standHtml = `
+    <div class="card">
+      <div class="card-title">📊 Průběžné pořadí ${finished ? '— konečné 🏁' : ''}</div>
+      <div class="table-wrapper">
+        <table class="sw-standings">
+          <thead><tr>
+            <th>#</th><th class="sw-th-team">Tým</th>
+            <th title="Výhry">V</th><th title="Prohry">P</th><th title="Volný los">Bye</th>
+            <th title="Body (výhra = 1)">Body</th>
+            <th title="Buchholz — součet bodů soupeřů">Buch.</th>
+            <th title="Rozdíl míčů">±</th>
+          </tr></thead>
+          <tbody>`;
+  standings.forEach((s, i) => {
+    const medal = finished && i === 0 ? '🥇' : finished && i === 1 ? '🥈' : finished && i === 2 ? '🥉' : '';
+    standHtml += `<tr class="${i === 0 && finished ? 'sw-rank-1' : ''}">
+      <td class="sw-rank">${i + 1}.</td>
+      <td class="sw-team-name">${medal} ${escapeHtml(s.name)}</td>
+      <td>${s.wins}</td><td>${s.losses}</td><td>${s.byes || ''}</td>
+      <td class="sw-pts">${s.points}</td>
+      <td>${s.buchholz}</td>
+      <td>${s.diff > 0 ? '+' + s.diff : s.diff}</td>
+    </tr>`;
+  });
+  standHtml += `</tbody></table></div></div>`;
+
+  // ── Rounds ──
+  let roundsHtml = '';
+  sw.rounds.forEach((round, ri) => {
+    const complete = swissRoundComplete(round);
+    let rows = '';
+    for (const m of round.matches) {
+      const w = matchWinner(state.scores, m.id, fmtId);
+      rows += `
+        <div class="sw-match">
+          <span class="sw-court">Kurt ${m.court}</span>
+          <span class="sw-side sw-side-l ${w === 1 ? 'sw-won' : ''}">${escapeHtml(m.t1)}</span>
+          <span class="sw-scores">${swissScoreInputs(m.id, fmtId, 1)}</span>
+          <span class="sw-colon">:</span>
+          <span class="sw-scores">${swissScoreInputs(m.id, fmtId, 2)}</span>
+          <span class="sw-side sw-side-r ${w === 2 ? 'sw-won' : ''}">${escapeHtml(m.t2)}</span>
+        </div>`;
+    }
+    if (round.byeTeam) {
+      rows += `<div class="sw-bye">🆓 <strong>${escapeHtml(round.byeTeam)}</strong> — volný los (bye, +1 výhra)</div>`;
+    }
+    roundsHtml += `
+      <div class="card sw-round ${complete ? 'sw-round-done' : ''}">
+        <div class="card-title">
+          🔁 Kolo ${ri + 1} <span class="sw-round-of">z ${sw.totalRounds}</span>
+          ${complete ? '<span class="sw-done-badge">✓ kompletní</span>' : ''}
+        </div>
+        ${rows}
+      </div>`;
+  });
+
+  // ── Action / status ──
+  let actionHtml = '';
+  if (finished) {
+    actionHtml = `<div class="sw-status sw-status-done">🏁 Turnaj dokončen — konečné pořadí je nahoře.</div>`;
+  } else if (allRounds && !lastDone) {
+    actionHtml = `<div class="sw-status">Doplň výsledky posledního kola pro konečné pořadí.</div>`;
+  } else {
+    const ready = lastDone;
+    actionHtml = `
+      <div class="btn-row no-print">
+        <button class="btn btn-primary" id="btnSwissNext" ${ready ? '' : 'disabled'}>
+          ➕ Generovat kolo ${roundsDone + 1}
+        </button>
+      </div>
+      ${ready ? '' : '<div class="sw-status">Doplň všechny výsledky aktuálního kola a pak vygeneruj další.</div>'}`;
+  }
+
+  el.innerHTML = standHtml + roundsHtml + actionHtml;
+
+  // ── Wire score inputs (re-render on each edit, preserving focus) ──
+  el.querySelectorAll('.sw-score-inp').forEach(inp => {
+    inp.addEventListener('input', e => {
+      const v = e.target.value;
+      if (v === '' || /^\d{1,2}$/.test(v)) {
+        state.scores[e.target.dataset.key] = v;
+        saveState();
+      }
+      withFocusPreserve(() => renderSwissView());
+    });
+  });
+  $('#btnSwissNext')?.addEventListener('click', generateNextSwissRound);
 }
 
 // ─── Step 3: Schedule ──────────────────────────────────────────────────────
@@ -327,6 +515,21 @@ function renderSchedule() {
       : opt.minMatchesPerTeam + '–' + opt.maxMatchesPerTeam + ' zápasů/tým'}</span>
     <span class="pill">${opt.matchFormat.name}</span>
   `;
+
+  // Swiss takes over step 3 with its own interactive view.
+  if (opt.type === 'swiss') {
+    $('#scheduleCard').classList.add('hidden');
+    $('#legendCard').classList.add('hidden');
+    $('#groupStandings').innerHTML = '';
+    $('#bracketView').innerHTML = '';
+    renderSwissView();
+    return;
+  }
+
+  $('#swissView').classList.add('hidden');
+  $('#swissView').innerHTML = '';
+  $('#scheduleCard').classList.remove('hidden');
+  $('#legendCard').classList.remove('hidden');
 
   renderScheduleTable();
   renderGroupStandings();
@@ -985,13 +1188,28 @@ function copyScheduleText() {
   lines.push(`${state.teams.length} týmů · ${state.courts} kurtů · ${opt.matchFormat.shortName}`);
   lines.push('');
 
-  let lastRound = null;
-  for (const m of state.schedule) {
-    if (m.roundName !== lastRound) {
-      lines.push(`\n--- ${m.roundName} ---`);
-      lastRound = m.roundName;
+  if (opt.type === 'swiss' && state.swiss) {
+    const sw = state.swiss;
+    sw.rounds.forEach((round, ri) => {
+      lines.push(`\n--- Kolo ${ri + 1} z ${sw.totalRounds} ---`);
+      for (const m of round.matches) {
+        const sc = matchScoreText(state.scores, m.id, sw.fmtId);
+        lines.push(`Kurt ${m.court}:  ${m.t1} vs ${m.t2}${sc ? '  ' + sc : ''}`);
+      }
+      if (round.byeTeam) lines.push(`Bye:  ${round.byeTeam}`);
+    });
+    const standings = computeSwissStandings(sw, state.scores, sw.fmtId);
+    lines.push('\n--- Pořadí ---');
+    standings.forEach((s, i) => lines.push(`${i + 1}. ${s.name} — ${s.points} b. (V${s.wins}/P${s.losses}, Buch. ${s.buchholz})`));
+  } else {
+    let lastRound = null;
+    for (const m of state.schedule) {
+      if (m.roundName !== lastRound) {
+        lines.push(`\n--- ${m.roundName} ---`);
+        lastRound = m.roundName;
+      }
+      lines.push(`${formatTime(m.time)}  Kurt ${m.court}:  ${m.team1Label} vs ${m.team2Label}`);
     }
-    lines.push(`${formatTime(m.time)}  Kurt ${m.court}:  ${m.team1Label} vs ${m.team2Label}`);
   }
 
   navigator.clipboard.writeText(lines.join('\n')).then(() => {
@@ -1026,7 +1244,16 @@ function restoreState() {
 
     const idx = snap.selectedOptionIndex;
     if (snap.step === 3 && idx != null && state.options[idx]) {
-      restoreSelectedOption(idx);     // keeps restored scores
+      state.selectedOption = state.options[idx];
+      if (state.selectedOption.type === 'swiss') {
+        // Swiss rounds are dynamic — restore them from the snapshot, don't rebuild.
+        state.swiss = snap.swiss && Array.isArray(snap.swiss.rounds)
+          ? snap.swiss
+          : (initSwiss(state.selectedOption), state.swiss);
+        renderSchedule();
+      } else {
+        restoreSelectedOption(idx);   // keeps restored scores
+      }
       goToStep(3);
       return 3;
     }
@@ -1050,6 +1277,7 @@ function resetAll() {
   state.selectedOption = null;
   state.schedule  = [];
   state.scores    = {};
+  state.swiss     = null;
   renderStep1();
   goToStep(1);
   showToast('Začínáme načisto — uložený turnaj byl vymazán.', 'success');
