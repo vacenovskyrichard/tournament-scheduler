@@ -371,12 +371,25 @@ input[type="range"] {
 .score-cell {
   display: flex; align-items: center; gap: 4px;
 }
+/* Unified score input — used everywhere (cross-tables, mini-brackets, bracket,
+   Swiss). Big enough to tap comfortably; no number spinners. */
 .score-inp {
-  width: 52px; padding: 6px 8px;
-  border: 1.5px solid var(--border); border-radius: 6px;
-  font-size: .9rem; text-align: center; outline: none;
+  width: 42px; height: 38px;
+  padding: 4px 6px;
+  border: 1.5px solid #94a3b8; border-radius: 8px;
+  font-size: 1.05rem; font-weight: 700; line-height: 1;
+  text-align: center; outline: none;
+  background: var(--white); color: var(--text);
+  transition: border-color .12s, box-shadow .12s;
+  -moz-appearance: textfield;
 }
-.score-inp:focus { border-color: var(--blue); }
+.score-inp::-webkit-outer-spin-button,
+.score-inp::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.score-inp::placeholder { color: #cbd5e1; font-weight: 400; }
+.score-inp:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--blue-l);
+}
 .score-sep { font-weight: 700; color: var(--gray); }
 
 .score-print-cell { display: flex; align-items: center; gap: 4px; }
@@ -558,17 +571,6 @@ input[type="range"] {
   border-radius: 3px;
   vertical-align: middle;
 }
-.ct-score-inp {
-  width: 32px;
-  padding: 2px 3px;
-  border: 1px solid #94a3b8;
-  border-radius: 3px;
-  font-size: .82rem;
-  text-align: center;
-  outline: none;
-  background: var(--white);
-}
-.ct-score-inp:focus { border-color: var(--blue); }
 .ct-pts, .ct-rank { font-weight: 700; }
 .ct-row-adv td:first-child { border-left: 3px solid var(--green); }
 .ct-row-adv .ct-rank { color: var(--green); }
@@ -678,18 +680,6 @@ input[type="range"] {
   border-radius: 3px;
   background: #fff;
 }
-.mb-score-inp {
-  width: 28px;
-  height: 22px;
-  padding: 0 2px;
-  border: 1.5px solid #94a3b8;
-  border-radius: 3px;
-  font-size: .85rem;
-  text-align: center;
-  outline: none;
-}
-.mb-score-inp:focus { border-color: var(--blue); }
-
 .mb-podium {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
@@ -835,17 +825,6 @@ input[type="range"] {
   border-radius: 3px;
   background: #fff;
 }
-.bm-score-inp {
-  width: 28px;
-  height: 22px;
-  padding: 0 2px;
-  border: 1.5px solid #94a3b8;
-  border-radius: 3px;
-  font-size: .85rem;
-  text-align: center;
-  outline: none;
-}
-.bm-score-inp:focus { border-color: var(--blue); }
 
 .bm-badge {
   color: #16a34a;
@@ -974,15 +953,6 @@ input[type="range"] {
 .sw-won { color: var(--green); font-weight: 800; }
 .sw-scores { flex: 0 0 auto; display: flex; gap: 3px; }
 .sw-colon { flex: 0 0 auto; color: var(--text-m); font-weight: 700; }
-.sw-score-inp {
-  width: 30px; height: 24px;
-  padding: 0 2px;
-  border: 1.5px solid #94a3b8; border-radius: 4px;
-  font-size: .85rem; text-align: center; outline: none;
-  background: var(--white);
-}
-.sw-score-inp:focus { border-color: var(--blue); }
-
 .sw-bye {
   padding: 8px 4px;
   font-size: .88rem; color: var(--text-m);

@@ -382,8 +382,8 @@ function swissScoreInputs(matchId, fmtId, side) {
   for (let s = 0; s < numSets; s++) {
     const key = `${matchId}_${side}_${s}`;
     const val = state.scores[key] ?? '';
-    html += `<input type="number" min="0" max="99" class="sw-score-inp"
-                    data-key="${key}" value="${val}" title="${labels[s]}" placeholder="—">`;
+    html += `<input type="text" inputmode="numeric" maxlength="2" class="score-inp"
+                    data-key="${key}" value="${val}" title="${labels[s]}" placeholder="–">`;
   }
   return html;
 }
@@ -477,19 +477,8 @@ function renderSwissView() {
   }
 
   el.innerHTML = standHtml + roundsHtml + actionHtml;
-
-  // ── Wire score inputs (re-render on each edit, preserving focus) ──
-  el.querySelectorAll('.sw-score-inp').forEach(inp => {
-    inp.addEventListener('input', e => {
-      const v = e.target.value;
-      if (v === '' || /^\d{1,2}$/.test(v)) {
-        state.scores[e.target.dataset.key] = v;
-        saveState();
-      }
-      withFocusPreserve(() => renderSwissView());
-    });
-  });
-  $('#btnSwissNext')?.addEventListener('click', generateNextSwissRound);
+  // Score inputs and the "next round" button are handled by delegation on
+  // #step3 (see wireScoreDelegation) — robust against re-renders.
 }
 
 // ─── Step 3: Schedule ──────────────────────────────────────────────────────
@@ -822,11 +811,11 @@ function renderGroupStandings() {
           const label = numSets === 1 ? '' : `<span class="ct-set-lbl">${setLabels[s]}</span>`;
           if (isOnline) {
             setRows.push(`<div class="ct-set-row">${label}
-              <input type="number" min="0" max="99" class="ct-score-inp"
-                     data-key="${k1}" value="${v1}" placeholder="—">
+              <input type="text" inputmode="numeric" maxlength="2" class="score-inp"
+                     data-key="${k1}" value="${v1}" placeholder="–">
               <span class="ct-sep">:</span>
-              <input type="number" min="0" max="99" class="ct-score-inp"
-                     data-key="${k2}" value="${v2}" placeholder="—">
+              <input type="text" inputmode="numeric" maxlength="2" class="score-inp"
+                     data-key="${k2}" value="${v2}" placeholder="–">
             </div>`);
           } else {
             setRows.push(`<div class="ct-set-row">${label}
@@ -862,19 +851,7 @@ function renderGroupStandings() {
 
   html += '</div></div>';
   el.innerHTML = html;
-
-  if (isOnline) {
-    el.querySelectorAll('.ct-score-inp, .mb-score-inp').forEach(inp => {
-      inp.addEventListener('input', e => {
-        const v = e.target.value;
-        if (v === '' || /^\d{1,2}$/.test(v)) {
-          state.scores[e.target.dataset.key] = v;
-          saveState();
-        }
-        withFocusPreserve(() => { renderGroupStandings(); renderBracket(); });
-      });
-    });
-  }
+  // Score inputs are handled by delegation on #step3 (see wireScoreDelegation).
 }
 
 // Mini-bracket renderer for 4-team modified pool groups.
@@ -908,7 +885,7 @@ function renderModMiniBracket(grp, ctx) {
         const key = `${match.id}_${teamN}_${s}`;
         const val = scores[key] ?? '';
         cells[side].push(isOnline
-          ? `<input type="number" min="0" max="99" class="mb-score-inp"
+          ? `<input type="text" inputmode="numeric" maxlength="2" class="score-inp"
                  data-key="${key}" value="${val}" title="${setLabels[s]}">`
           : `<span class="mb-score-box" title="${setLabels[s]}"></span>`);
       }
@@ -1052,7 +1029,7 @@ function renderBracket() {
           const key = `${m.id}_${team}_${s}`;
           const val = state.scores[key] ?? '';
           cells.push(isOnline
-            ? `<input type="number" min="0" max="99" class="bm-score-inp"
+            ? `<input type="text" inputmode="numeric" maxlength="2" class="score-inp"
                    data-key="${key}" value="${val}" title="${setLabels[s]}">`
             : `<span class="bm-score-box" title="${setLabels[s]}"></span>`);
         }
@@ -1096,19 +1073,7 @@ function renderBracket() {
 
   html += '</div></div>';
   el.innerHTML = html;
-
-  if (isOnline) {
-    el.querySelectorAll('.bm-score-inp[data-key]').forEach(inp => {
-      inp.addEventListener('input', e => {
-        const v = e.target.value;
-        if (v === '' || /^\d{1,2}$/.test(v)) {
-          state.scores[e.target.dataset.key] = v;
-          saveState();
-        }
-        withFocusPreserve(() => { renderGroupStandings(); renderBracket(); });
-      });
-    });
-  }
+  // Score inputs are handled by delegation on #step3 (see wireScoreDelegation).
 }
 
 // ─── Legend ─────────────────────────────────────────────────────────────────
@@ -1145,23 +1110,6 @@ function renderLegend() {
 }
 
 // ─── Utilities ─────────────────────────────────────────────────────────────
-function withFocusPreserve(fn) {
-  const ae  = document.activeElement;
-  const key = ae && ae.dataset ? ae.dataset.key : null;
-  const ss  = ae && ae.tagName === 'INPUT' ? ae.selectionStart : null;
-  const se  = ae && ae.tagName === 'INPUT' ? ae.selectionEnd   : null;
-  fn();
-  if (key) {
-    const next = document.querySelector(`input[data-key="${key}"]`);
-    if (next) {
-      next.focus();
-      if (ss != null) {
-        try { next.setSelectionRange(ss, se != null ? se : ss); } catch (_) {}
-      }
-    }
-  }
-}
-
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -1283,6 +1231,45 @@ function resetAll() {
   showToast('Začínáme načisto — uložený turnaj byl vymazán.', 'success');
 }
 
+// ─── Score input handling (delegated on #step3) ─────────────────────────────
+// All score inputs (cross-tables, mini-brackets, bracket, Swiss) share the
+// `.score-inp` class. Delegation means we bind once on the stable #step3 panel
+// instead of re-binding after every render — and it survives the re-render that
+// replaces the inputs/buttons:
+//   • `input`  → store value only (no re-render) → smooth typing, keyboard stays.
+//   • `change` → re-render the relevant view (standings, bracket, Swiss).
+// The Swiss "next round" button is delegated too, so a click right after typing
+// the last score still works even though `change` rebuilds the button.
+function wireScoreDelegation() {
+  const step3 = $('#step3');
+
+  step3.addEventListener('input', e => {
+    const inp = e.target.closest('.score-inp');
+    if (!inp) return;
+    const v = inp.value;
+    if (/^\d{0,2}$/.test(v)) {
+      state.scores[inp.dataset.key] = v;
+      saveState();
+    } else {
+      inp.value = state.scores[inp.dataset.key] ?? '';   // reject non-numeric
+    }
+  });
+
+  step3.addEventListener('change', e => {
+    if (!e.target.closest('.score-inp')) return;
+    if (state.selectedOption && state.selectedOption.type === 'swiss') {
+      renderSwissView();
+    } else {
+      renderGroupStandings();
+      renderBracket();
+    }
+  });
+
+  step3.addEventListener('click', e => {
+    if (e.target.closest('#btnSwissNext')) generateNextSwissRound();
+  });
+}
+
 // ─── Event wiring ──────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   $('#addTeam').addEventListener('click', addTeam);
@@ -1307,6 +1294,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#btnCopy').addEventListener('click',       copyScheduleText);
   $('#btnRegenerate').addEventListener('click', () => goToStep(2));
   $('#btnReset').addEventListener('click',      resetAll);
+
+  wireScoreDelegation();
 
   // Restore previous session (falls back to a fresh step 1 when none).
   restoreState();

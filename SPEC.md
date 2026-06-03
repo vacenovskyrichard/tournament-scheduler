@@ -471,15 +471,22 @@ CSS proměnné (`:root`):
 5. `swiss` jen v online režimu; `pool_knockout` jen N ≥ 6; `modified_pool` musí mít
    ≥ 1 čtyřčlennou skupinu; `round_robin` jen 3–5 týmů; `double_elim` jen N ≥ 4.
 6. V `print` režimu se skóre nezadává (jen prázdná pole); v `online` se počítá pořadí
-   a propagují vítězové pavoukem v reálném čase (`withFocusPreserve` zachová focus
-   v inputu při re-renderu).
+   a propagují vítězové pavoukem. **Všechny vstupy skóre** (křížové tabulky, mini-pavouk,
+   pavouk, Swiss) sdílejí třídu **`.score-inp`** (`type="text" inputmode="numeric"
+   maxlength="2"` — číselná klávesnice na mobilu, bez spinnerů) a obsluhují se
+   **delegací na `#step3`** (`wireScoreDelegation`, naváže se jednou): `input` jen uloží
+   hodnotu (bez překreslení → plynulé psaní), `change` překreslí příslušný pohled
+   (tabulky/pavouk, nebo Swiss). Tlačítko Swiss „další kolo" je rovněž delegované, takže
+   funguje i při kliknutí hned po zadání posledního skóre.
 7. Při změně formátu (`selectOption`) se skóre **vynuluje**; při obnově ze storage
    (`restoreSelectedOption`) se **zachová**.
 8. Minimum 3 týmy, minimální délka turnaje 30 min.
 9. Inputy skóre přijímají jen prázdno nebo 1–2 číslice.
-10. Skóre v pavouku (online) jsou inputy s třídou `.bm-score-inp` a atributem
-    `data-key` — handler musí poslouchat na **tomto** selektoru (historicky tu byl bug
-    se selektorem `.bm-slash`, kvůli kterému zadávání v pavouku nefungovalo).
+10. Všechny vstupy skóre mají třídu `.score-inp` a atribut `data-key`
+    (`${matchId}_${team}_${set}`); obsluhují se delegací na `#step3` (viz bod 6), ne
+    per-element listenery. (Historicky tu byly dva bugy: malé `type="number"` vstupy se
+    spinnery a překreslování při každém stisku klávesy kradoucí focus — obojí vyřešeno
+    sjednocením na `.score-inp` + delegací s `input`/`change`.)
 11. **Swiss** (§6.6): další kolo lze vygenerovat jen když je aktuální kolo kompletní;
     žádné rematche (pokud se lze vyhnout); každý tým max. jeden bye; bye = výhra (+1 bod);
     `state.swiss` (kola) je zdroj pravdy a ukládá se do `localStorage` (na rozdíl od
