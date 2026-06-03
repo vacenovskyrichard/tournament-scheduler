@@ -23,6 +23,51 @@ const SPORTS = {
   badminton:        { label: 'Badminton',         emoji: '🏸' },
 };
 
+// ─── Persistence (localStorage) ──────────────────────────────────────────────
+// We persist only the *inputs* (sport, teams, parameters, mode), the entered
+// scores, the current step, and which option was selected. The derived schedule
+// holds Date objects that don't survive JSON, so it is deterministically rebuilt
+// from these inputs on load (matchId + time generation are reproducible).
+const STORAGE_KEY = 'tourneymaker.state.v1';
+
+function saveState() {
+  try {
+    const snapshot = {
+      v: 1,
+      step:      state.step,
+      sport:     state.sport,
+      teams:     state.teams,
+      courts:    state.courts,
+      startTime: state.startTime,
+      endTime:   state.endTime,
+      mode:      state.mode,
+      scores:    state.scores,
+      selectedOptionIndex:
+        state.selectedOption && state.options.length
+          ? state.options.indexOf(state.selectedOption)
+          : null,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+  } catch (_) {
+    // Storage disabled (private mode) or full — degrade silently to no-persist.
+  }
+}
+
+function loadSnapshot() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const snap = JSON.parse(raw);
+    return snap && snap.v === 1 ? snap : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function clearSavedState() {
+  try { localStorage.removeItem(STORAGE_KEY); } catch (_) {}
+}
+
 // ─── DOM helpers ───────────────────────────────────────────────────────────
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
@@ -40,6 +85,7 @@ function goToStep(n) {
   // Wider main-content on step 3 so the bracket can fit without horizontal scroll.
   $('.main-content').classList.toggle('wide-content', n === 3);
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  saveState();
 }
 
 // ─── Step 1: Setup ─────────────────────────────────────────────────────────
@@ -65,6 +111,7 @@ function renderSportSelector() {
     btn.addEventListener('click', () => {
       state.sport = btn.dataset.sport;
       renderSportSelector();
+      saveState();
     });
   });
 }
@@ -83,6 +130,7 @@ function renderTeamList() {
   container.querySelectorAll('.team-input').forEach(inp => {
     inp.addEventListener('input', e => {
       state.teams[+e.target.dataset.index] = e.target.value;
+      saveState();
     });
   });
   container.querySelectorAll('.btn-remove-team').forEach(btn => {
@@ -92,6 +140,7 @@ function renderTeamList() {
         state.teams.splice(idx, 1);
         renderTeamList();
         updateAvailableTime();
+        saveState();
       }
     });
   });
@@ -102,6 +151,7 @@ function addTeam() {
   state.teams.push(`Tým ${String.fromCharCode(65 + state.teams.length)}`);
   renderTeamList();
   updateAvailableTime();
+  saveState();
   const inputs = $$('.team-input');
   inputs[inputs.length - 1]?.focus();
   inputs[inputs.length - 1]?.select();
@@ -130,27 +180,33 @@ function updateAvailableTime() {
   $('#availableTime').textContent = `Dostupný čas: ${minutesToHHMM(totalMin)}`;
 }
 
-function validateStep1() {
+function validateStep1(silent = false) {
   const [sh, sm] = state.startTime.split(':').map(Number);
   const [eh, em] = state.endTime.split(':').map(Number);
   const totalMin = (eh * 60 + em) - (sh * 60 + sm);
-  if (state.teams.length < 3) { showToast('Zadej alespoň 3 týmy.', 'error'); return false; }
-  if (state.teams.some(t => !t.trim())) { showToast('Všechny týmy musí mít název.', 'error'); return false; }
-  if (totalMin < 30) { showToast('Turnaj musí trvat alespoň 30 minut.', 'error'); return false; }
+  const fail = (msg) => { if (!silent) showToast(msg, 'error'); return false; };
+  if (state.teams.length < 3) return fail('Zadej alespoň 3 týmy.');
+  if (state.teams.some(t => !t.trim())) return fail('Všechny týmy musí mít název.');
+  if (totalMin < 30) return fail('Turnaj musí trvat alespoň 30 minut.');
   return true;
 }
 
 // ─── Step 2: Options ───────────────────────────────────────────────────────
-function generateAndShowOptions() {
-  if (!validateStep1()) return;
-
+// Deterministic given the current inputs — used both for the user action and for
+// restoring the saved state on load.
+function computeOptions() {
   const today = new Date();
   const [sh, sm] = state.startTime.split(':').map(Number);
   const [eh, em] = state.endTime.split(':').map(Number);
   const start = new Date(today.getFullYear(), today.getMonth(), today.getDate(), sh, sm);
   const end   = new Date(today.getFullYear(), today.getMonth(), today.getDate(), eh, em);
+  return generateOptions(state.teams, state.courts, start, end, state.mode === 'online');
+}
 
-  state.options = generateOptions(state.teams, state.courts, start, end, state.mode === 'online');
+function generateAndShowOptions() {
+  if (!validateStep1()) return;
+
+  state.options = computeOptions();
 
   if (state.options.length === 0) {
     showToast('Žádný formát se nevejde do zadaného času. Zkus delší čas nebo jiný počet kurtů.', 'error');
@@ -226,15 +282,26 @@ function renderOptions() {
   });
 }
 
-function selectOption(idx) {
-  state.selectedOption = state.options[idx];
+function buildScheduleForSelected() {
   const [sh, sm] = state.startTime.split(':').map(Number);
   const today    = new Date();
   const start    = new Date(today.getFullYear(), today.getMonth(), today.getDate(), sh, sm);
-  state.schedule = buildSchedule(state.selectedOption, state.teams, state.courts, start);
+  return buildSchedule(state.selectedOption, state.teams, state.courts, start);
+}
+
+function selectOption(idx) {
+  state.selectedOption = state.options[idx];
+  state.schedule = buildScheduleForSelected();
   state.scores   = {};
   renderSchedule();
   goToStep(3);
+}
+
+// Like selectOption, but keeps the already-restored scores (used on page load).
+function restoreSelectedOption(idx) {
+  state.selectedOption = state.options[idx];
+  state.schedule = buildScheduleForSelected();
+  renderSchedule();
 }
 
 // ─── Step 3: Schedule ──────────────────────────────────────────────────────
@@ -599,6 +666,7 @@ function renderGroupStandings() {
         const v = e.target.value;
         if (v === '' || /^\d{1,2}$/.test(v)) {
           state.scores[e.target.dataset.key] = v;
+          saveState();
         }
         withFocusPreserve(() => { renderGroupStandings(); renderBracket(); });
       });
@@ -827,11 +895,12 @@ function renderBracket() {
   el.innerHTML = html;
 
   if (isOnline) {
-    el.querySelectorAll('.bm-slash[data-key]').forEach(inp => {
+    el.querySelectorAll('.bm-score-inp[data-key]').forEach(inp => {
       inp.addEventListener('input', e => {
         const v = e.target.value;
         if (v === '' || /^\d{1,2}$/.test(v)) {
           state.scores[e.target.dataset.key] = v;
+          saveState();
         }
         withFocusPreserve(() => { renderGroupStandings(); renderBracket(); });
       });
@@ -930,22 +999,77 @@ function copyScheduleText() {
   });
 }
 
-// ─── Event wiring ──────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+// ─── Restore / reset ─────────────────────────────────────────────────────────
+// Rebuild the app from a saved snapshot. Inputs are applied directly; steps 2 & 3
+// are re-derived deterministically so the user lands where they left off — with
+// their scores intact. Returns the step that was restored to.
+function restoreState() {
+  const snap = loadSnapshot();
+  if (!snap) { renderStep1(); goToStep(1); return 1; }
+
+  // Step-1 inputs
+  if (snap.sport in SPORTS)                                 state.sport = snap.sport;
+  if (Array.isArray(snap.teams) && snap.teams.length >= 2)  state.teams = snap.teams;
+  if (Number.isFinite(snap.courts))                         state.courts = snap.courts;
+  if (typeof snap.startTime === 'string')                   state.startTime = snap.startTime;
+  if (typeof snap.endTime === 'string')                     state.endTime = snap.endTime;
+  if (snap.mode === 'print' || snap.mode === 'online')      state.mode = snap.mode;
+  if (snap.scores && typeof snap.scores === 'object')       state.scores = snap.scores;
+
   renderStep1();
 
+  // Re-derive steps 2 & 3 only if the inputs are still valid.
+  if ((snap.step === 2 || snap.step === 3) && validateStep1(true)) {
+    state.options = computeOptions();
+    if (state.options.length === 0) { goToStep(1); return 1; }
+    renderOptions();
+
+    const idx = snap.selectedOptionIndex;
+    if (snap.step === 3 && idx != null && state.options[idx]) {
+      restoreSelectedOption(idx);     // keeps restored scores
+      goToStep(3);
+      return 3;
+    }
+    goToStep(2);
+    return 2;
+  }
+
+  goToStep(1);
+  return 1;
+}
+
+function resetAll() {
+  clearSavedState();
+  state.sport     = 'beach_volleyball';
+  state.teams     = ['Tým A', 'Tým B', 'Tým C', 'Tým D'];
+  state.courts    = 2;
+  state.startTime = '09:00';
+  state.endTime   = '13:00';
+  state.mode      = 'print';
+  state.options   = [];
+  state.selectedOption = null;
+  state.schedule  = [];
+  state.scores    = {};
+  renderStep1();
+  goToStep(1);
+  showToast('Začínáme načisto — uložený turnaj byl vymazán.', 'success');
+}
+
+// ─── Event wiring ──────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
   $('#addTeam').addEventListener('click', addTeam);
 
   $('#courts').addEventListener('input', e => {
     state.courts = +e.target.value;
     $('#courtsVal').textContent = e.target.value;
+    saveState();
   });
 
-  $('#startTime').addEventListener('change', e => { state.startTime = e.target.value; updateAvailableTime(); });
-  $('#endTime').addEventListener('change',   e => { state.endTime   = e.target.value; updateAvailableTime(); });
+  $('#startTime').addEventListener('change', e => { state.startTime = e.target.value; updateAvailableTime(); saveState(); });
+  $('#endTime').addEventListener('change',   e => { state.endTime   = e.target.value; updateAvailableTime(); saveState(); });
 
   $$('input[name="mode"]').forEach(r => {
-    r.addEventListener('change', e => { state.mode = e.target.value; });
+    r.addEventListener('change', e => { state.mode = e.target.value; saveState(); });
   });
 
   $('#btnToStep2').addEventListener('click',   generateAndShowOptions);
@@ -954,6 +1078,8 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#btnPrint').addEventListener('click',      printSchedule);
   $('#btnCopy').addEventListener('click',       copyScheduleText);
   $('#btnRegenerate').addEventListener('click', () => goToStep(2));
+  $('#btnReset').addEventListener('click',      resetAll);
 
-  goToStep(1);
+  // Restore previous session (falls back to a fresh step 1 when none).
+  restoreState();
 });
